@@ -23,7 +23,7 @@ Commands:
   service-account <target> [--ip IP] [--apply]
       Ensures the host-scoped root service account and sudo rule exist.
 
-  verify-service-account <target>
+  verify-service-account <target> [--ssh-host HOST] [--probe-user USER]
       Verifies SSH login and passwordless sudo for a host service account.
 
   enroll-user <user> <email> --first F --last L [--apply]

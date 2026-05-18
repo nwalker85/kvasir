@@ -61,6 +61,13 @@ item, SSH reachability, `getent passwd svc-<host>-root`,
 `sss_ssh_authorizedkeys svc-<host>-root`, service-account SSH login with the
 stored bootstrap key, and `sudo -n true`.
 
+If the host identity and SSH route differ, keep the target as the identity host
+and override only the network path:
+
+```bash
+kvasir verify-service-account grani --ssh-host 100.106.47.41
+```
+
 ### Common issues
 
 - **`ssh ... permission denied`** — kvasir uses `sudo` non-interactively on the target. The target user needs passwordless sudo (or you need an interactive shell).

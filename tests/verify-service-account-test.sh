@@ -24,10 +24,15 @@ fi
 
 case "$*" in
   *"--format json"*)
-    printf '{"title":"FreeIPA Root Host vakr"}\n'
+    jq -n \
+      --arg private_key "${KVASIR_TEST_PRIVATE_KEY:-test-private-key}" \
+      '{title:"FreeIPA Root Host vakr", fields:[
+        {id:"username", label:"username", type:"STRING", value:"svc-vakr-root"},
+        {id:"password", label:"password", type:"CONCEALED", value:($private_key + "[password]")}
+      ]}'
     ;;
   *"--fields password"*)
-    printf '%s\n' "${KVASIR_TEST_PRIVATE_KEY:-test-private-key}"
+    printf '"%s"\n' "${KVASIR_TEST_PRIVATE_KEY:-test-private-key}"
     ;;
   *)
     printf 'unexpected op args: %s\n' "$*" >&2
@@ -133,6 +138,7 @@ assert_contains() {
 
 run_verify() {
   local mode="${1:-ok}"
+  shift || true
   OUT="${TMPDIR}/out"
   ERR="${TMPDIR}/err"
   SSH_LOG="${TMPDIR}/ssh.log"
@@ -145,7 +151,7 @@ run_verify() {
     KVASIR_TEST_PRIVATE_KEY="-----BEGIN OPENSSH PRIVATE KEY-----
 stub-key
 -----END OPENSSH PRIVATE KEY-----" \
-    "${ROOT}/bin/kvasir" verify-service-account vakr >"${OUT}" 2>"${ERR}"
+    "${ROOT}/bin/kvasir" verify-service-account vakr "$@" >"${OUT}" 2>"${ERR}"
   STATUS=$?
   set -e
 }
@@ -173,6 +179,16 @@ test_success_table_and_noninteractive_ssh() {
   assert_contains "${SSH_LOG}" "sudo\\ -n\\ true"
 }
 
+test_route_override_separates_identity_from_ssh_host() {
+  run_verify ok --ssh-host 100.106.47.41
+  [[ "${STATUS}" -eq 0 ]] || fail "expected success, got ${STATUS}"
+  assert_contains "${OUT}" "Host: vakr.ravenhelm.dev"
+  assert_contains "${OUT}" "Target SSH reachable"
+  assert_contains "${OUT}" "PASS    ssh svc-vakr-root@100.106.47.41 true"
+  assert_contains "${SSH_LOG}" "svc-vakr-root@100.106.47.41 true"
+  assert_contains "${SSH_LOG}" "svc-vakr-root@100.106.47.41 id"
+}
+
 test_missing_authorized_keys_prints_action() {
   run_verify no_keys
   [[ "${STATUS}" -ne 0 ]] || fail "expected non-zero status for missing keys"
@@ -189,6 +205,7 @@ test_sudo_failure_prints_action() {
 
 test_help_lists_verify_command
 test_success_table_and_noninteractive_ssh
+test_route_override_separates_identity_from_ssh_host
 test_missing_authorized_keys_prints_action
 test_sudo_failure_prints_action
 
