@@ -14,7 +14,8 @@ workflow; minimal end-user input.
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `kvasir enroll-host <target>`       | Joins a Linux host to the `RAVENHELM.DEV` FreeIPA realm. Drives the recipe in `[memory/freeipa-fleet-enrollment-recipe.md](../../../.claude/projects/-Users-nate-docs-personal-audio/memory/freeipa-fleet-enrollment-recipe.md)`: pre-creates the host record with an OTP, copies the CA cert, runs `ipa-client-install`, patches `default.conf`, enables sssd + mkhomedir, validates, ensures the host-scoped root service account + sudo rule, and stores the OTP in 1Password. |
 | `kvasir service-account <target>`   | Ensures the host-scoped root service account exists in FreeIPA and creates the initial credential bundle + 1Password item if needed. |
-| `kvasir verify-service-account <target>` | Verifies the 1Password item, target SSH reachability, FreeIPA/SSSD user resolution, SSSD SSH keys, service-account SSH login, and `sudo -n true` without prompting. Use `--ssh-host` and `--probe-user` when the identity host name and network route differ. |
+| `kvasir install-service-account-key <target>` | Installs the service-account public key into host-local `~svc-<host>-root/.ssh/authorized_keys`. |
+| `kvasir verify-service-account <target>` | Verifies the 1Password item, target SSH reachability, FreeIPA/SSSD user resolution, SSSD SSH keys, host-local `authorized_keys`, service-account SSH login, and `sudo -n true` without prompting. Use `--ssh-host` and `--probe-user` when the identity host name and network route differ. |
 | `kvasir enroll-user <user> <email>` | Provisions a user in FreeIPA + Zitadel and stores credentials in 1Password (`FreeIPA <user>` item, ravenmask vault).                                                                                                                                                                                                                                                                                                |
 | `kvasir add-ssh-key --fido2`        | Generates a resident FIDO2 ed25519-sk key on the YubiKey, registers it on the FreeIPA user via `ipa user-mod --addattr=ipasshpubkey`, and wires up `~/.ssh/config` with a `Match user` block.                                                                                                                                                                                                                       |
 
@@ -53,6 +54,7 @@ kvasir/
 │   ├── kvasir          # entrypoint dispatcher
 │   ├── enroll-host
 │   ├── service-account
+│   ├── install-service-account-key
 │   ├── verify-service-account
 │   ├── enroll-user
 │   └── add-ssh-key
@@ -82,10 +84,14 @@ kvasir enroll-host vakr --apply
 # Refresh just the host-scoped root service account
 kvasir service-account vakr --apply
 
+# Install the service key into host-local authorized_keys
+kvasir install-service-account-key vakr --apply
+
 # Verify the service account can log in and run non-interactive sudo
 kvasir verify-service-account vakr
 
 # If the local SSH alias points at the wrong network path
+kvasir install-service-account-key grani --ssh-host 100.106.47.41 --apply
 kvasir verify-service-account grani --ssh-host 100.106.47.41
 
 # Add a YubiKey-backed SSH key for the current user

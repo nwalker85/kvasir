@@ -42,6 +42,20 @@ esac
 STUB
 chmod +x "${STUB_DIR}/op"
 
+cat >"${STUB_DIR}/ssh-keygen" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$1" == "-y" && "$2" == "-f" ]]; then
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest svc-vakr-root@vakr.ravenhelm.dev\n'
+  exit 0
+fi
+
+printf 'unexpected ssh-keygen args: %s\n' "$*" >&2
+exit 64
+STUB
+chmod +x "${STUB_DIR}/ssh-keygen"
+
 cat >"${STUB_DIR}/ssh" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -104,6 +118,10 @@ case "$cmd" in
   "sss_ssh_authorizedkeys svc-vakr-root")
     [[ "$mode" == "no_keys" ]] && exit 0
     printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest svc-vakr-root@vakr.ravenhelm.dev\n'
+    ;;
+  *authorized_keys*)
+    [[ "$mode" == "auth_keys_missing" ]] && exit 1
+    exit 0
     ;;
   id)
     [[ "$mode" == "login_fail" ]] && exit 255
@@ -171,6 +189,8 @@ test_success_table_and_noninteractive_ssh() {
   assert_contains "${OUT}" "PASS    FreeIPA Root Host vakr"
   assert_contains "${OUT}" "SSSD authorized keys resolves"
   assert_contains "${OUT}" "PASS    1 key"
+  assert_contains "${OUT}" "Host authorized_keys contains key"
+  assert_contains "${OUT}" "PASS    ~svc-vakr-root/.ssh/authorized_keys"
   assert_contains "${OUT}" "Passwordless sudo"
   assert_contains "${OUT}" "PASS    sudo -n true"
   assert_contains "${SSH_LOG}" "BatchMode=yes"
@@ -203,10 +223,18 @@ test_sudo_failure_prints_action() {
   assert_contains "${OUT}" "Action: rerun kvasir service-account vakr --apply, then refresh the target SSSD sudo cache"
 }
 
+test_missing_host_authorized_keys_prints_action() {
+  run_verify auth_keys_missing
+  [[ "${STATUS}" -ne 0 ]] || fail "expected non-zero status for missing host authorized_keys"
+  assert_contains "${OUT}" "Host authorized_keys contains key  FAIL"
+  assert_contains "${OUT}" "Action: run kvasir install-service-account-key vakr --ssh-host vakr --apply"
+}
+
 test_help_lists_verify_command
 test_success_table_and_noninteractive_ssh
 test_route_override_separates_identity_from_ssh_host
 test_missing_authorized_keys_prints_action
 test_sudo_failure_prints_action
+test_missing_host_authorized_keys_prints_action
 
 printf 'ok - verify-service-account tests\n'

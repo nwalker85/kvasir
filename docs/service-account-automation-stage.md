@@ -27,7 +27,9 @@ This is a bridge, not the final privileged access architecture.
 In scope:
 
 - Create a host-scoped FreeIPA service account.
-- Attach an SSH public key to that FreeIPA user.
+- Attach an SSH public key to that FreeIPA user as directory bootstrap state.
+- Install the same SSH public key into the host-local service account
+  `authorized_keys` file.
 - Create a host-scoped FreeIPA sudo rule with passwordless sudo.
 - Store bootstrap credential material in 1Password.
 - Verify that SSH and `sudo -n` work without prompting.
@@ -93,7 +95,8 @@ Current flow:
 Automation runner
   -> reaches host over Tailscale or approved network path
   -> logs in as svc-<host>-root
-  -> SSHD resolves SSH keys through SSSD/FreeIPA
+  -> SSHD accepts the key from host-local authorized_keys
+  -> SSSD/FreeIPA provides the Unix account and remains bootstrap/directory key state
   -> FreeIPA sudo rule grants NOPASSWD root on that host
   -> automation runs sudo -n commands
 ```
@@ -102,10 +105,11 @@ Kvasir must prove this flow works. Creating the account is not enough.
 
 ## Required Host SSH Configuration
 
-The host must be FreeIPA enrolled and must resolve SSH keys from FreeIPA through
-SSSD.
+The host must be FreeIPA enrolled. Kvasir keeps the public key attached to the
+FreeIPA user as directory bootstrap state, but the preferred SSH auth surface is
+the host-local `~svc-<host>-root/.ssh/authorized_keys` file.
 
-The effective OpenSSH configuration must support the equivalent of:
+The effective OpenSSH configuration may support the equivalent of:
 
 ```text
 AuthorizedKeysCommand /usr/bin/sss_ssh_authorizedkeys
@@ -113,7 +117,8 @@ AuthorizedKeysCommandUser nobody
 ```
 
 Distribution packages may install this through included snippets. Kvasir should
-verify behavior rather than assume a specific file path.
+verify behavior rather than assume a specific file path, but this is no longer
+the only SSH key source for automation.
 
 The minimum behavioral proof is:
 
@@ -121,7 +126,13 @@ The minimum behavioral proof is:
 sss_ssh_authorizedkeys svc-<host>-root
 ```
 
-This command must print at least one SSH public key on the target host.
+This command should print at least one SSH public key on the target host.
+
+The host-local behavioral proof is:
+
+```bash
+grep -Fxq "<service-public-key>" ~svc-<host>-root/.ssh/authorized_keys
+```
 
 ## Required Sudo Configuration
 
@@ -170,6 +181,22 @@ Expected behavior:
 This command is idempotent. If the 1Password item already exists, Kvasir should
 refresh the FreeIPA user and sudo rule without rotating credentials.
 
+### Install Host Authorized Key
+
+Required command:
+
+```bash
+kvasir install-service-account-key <host> --apply
+```
+
+Expected behavior:
+
+1. Read the bootstrap private key from `FreeIPA Root Host <host>`.
+2. Derive the matching public key.
+3. Log in as `svc-<host>-root`.
+4. Create `~svc-<host>-root/.ssh/authorized_keys` if needed.
+5. Add the public key idempotently.
+
 ### Verify Account
 
 Required new command:
@@ -198,19 +225,21 @@ Expected checks:
    sss_ssh_authorizedkeys svc-<host>-root
    ```
 
-7. Confirm SSH login works as the service account:
+7. Confirm host-local `authorized_keys` contains the service account key.
+
+8. Confirm SSH login works as the service account:
 
    ```bash
    ssh svc-<host>-root@<host> 'id'
    ```
 
-8. Confirm sudo works non-interactively:
+9. Confirm sudo works non-interactively:
 
    ```bash
    ssh svc-<host>-root@<host> 'sudo -n true'
    ```
 
-9. Print a pass/fail table.
+10. Print a pass/fail table.
 
 The command must not prompt for sudo. If a check would require a password prompt,
 the verification fails.
@@ -228,6 +257,7 @@ Check                              Result  Evidence
 Target SSH reachable               PASS    ssh vakr true
 FreeIPA/SSSD user resolves         PASS    uid/gid returned
 SSSD authorized keys resolves      PASS    1 key
+Host authorized_keys contains key  PASS    ~svc-vakr-root/.ssh/authorized_keys
 Service account SSH login          PASS    uid=...
 Passwordless sudo                  PASS    sudo -n true
 ```
@@ -245,7 +275,8 @@ Action: rerun kvasir service-account vakr --apply, then verify sshd uses sss_ssh
 | --- | --- | --- |
 | `getent passwd svc-<host>-root` fails | Host is not FreeIPA/SSSD enrolled or SSSD is unhealthy | Re-run or repair `kvasir enroll-host <host> --apply` |
 | `sss_ssh_authorizedkeys svc-<host>-root` prints no keys | SSH public key was not attached in FreeIPA or SSSD cannot read it | Re-run `kvasir service-account <host> --apply` and inspect FreeIPA user attributes |
-| SSH login fails but `sss_ssh_authorizedkeys` works | SSHD is not using SSSD authorized key lookup or client key is wrong | Verify `AuthorizedKeysCommand` behavior and 1Password private key material |
+| host `authorized_keys` does not contain the key | Host-local key install has not run or home creation failed | Run `kvasir install-service-account-key <host> --apply` |
+| SSH login fails but keys resolve | Host-local `authorized_keys`, SSSD SSH lookup, or client key is wrong | Verify host-local `authorized_keys`, `AuthorizedKeysCommand` behavior, and 1Password private key material |
 | `sudo -n true` fails | FreeIPA sudo rule missing, stale, not applied, or host not matched | Refresh service account and sudo rule, restart/refresh SSSD sudo cache |
 | SSH works only by prompting | Automation is using the wrong identity or key | Ensure automation uses `svc-<host>-root` and the matching 1Password/OpenBao credential |
 | Host unreachable | Network path or Tailscale ACL issue | Fix tailnet reachability before debugging identity |
@@ -309,6 +340,7 @@ A host is ready for automation when all of these are true:
 - `FreeIPA Root Host <host>` exists in 1Password.
 - `getent passwd svc-<host>-root` works on the target.
 - `sss_ssh_authorizedkeys svc-<host>-root` returns at least one key on the target.
+- `~svc-<host>-root/.ssh/authorized_keys` contains the service account public key.
 - `ssh svc-<host>-root@<host> 'id'` succeeds.
 - `ssh svc-<host>-root@<host> 'sudo -n true'` succeeds.
 - Automation can run the required command without asking for human approval.
