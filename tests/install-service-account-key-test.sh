@@ -56,7 +56,7 @@ printf '\n' >>"${KVASIR_TEST_SSH_LOG}"
 cat >"${KVASIR_TEST_REMOTE_SCRIPT}"
 
 case "$*" in
-  *"svc-vakr-root@100.106.47.41"*bash\ -s*)
+  *"nwalker@100.106.47.41"*bash\ -s*)
     exit 0
     ;;
   *)
@@ -80,11 +80,12 @@ PATH="${STUB_DIR}:$PATH" \
   KVASIR_TEST_PRIVATE_KEY="-----BEGIN OPENSSH PRIVATE KEY-----
 stub-key
 -----END OPENSSH PRIVATE KEY-----" \
-  "${ROOT}/bin/kvasir" install-service-account-key vakr --ssh-host 100.106.47.41 --apply >"${OUT}" 2>"${ERR}"
+  "${ROOT}/bin/kvasir" install-service-account-key vakr --ssh-host 100.106.47.41 --bootstrap-user nwalker --apply >"${OUT}" 2>"${ERR}"
 
-grep -Fq 'svc-vakr-root@100.106.47.41' "${SSH_LOG}"
+grep -Fq 'nwalker@100.106.47.41' "${SSH_LOG}"
 grep -Fq 'authorized_keys' "${REMOTE_SCRIPT}"
 # shellcheck disable=SC2016
-grep -Fq 'grep -Fxq "$pubkey"' "${REMOTE_SCRIPT}"
+grep -Fq 'sudo -n grep -Fxq "$pubkey"' "${REMOTE_SCRIPT}"
+grep -Fq 'mode=bootstrap' "${SSH_LOG}"
 
 printf 'ok - install service account key\n'

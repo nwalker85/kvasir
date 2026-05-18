@@ -24,7 +24,7 @@ Commands:
   service-account <target> [--ip IP] [--apply]
       Ensures the host-scoped root service account and sudo rule exist.
 
-  install-service-account-key <target> [--ssh-host HOST] [--apply]
+  install-service-account-key <target> [--ssh-host HOST] [--bootstrap-user USER] [--apply]
       Installs the service account key into host-local authorized_keys.
 
   verify-service-account <target> [--ssh-host HOST] [--probe-user USER]

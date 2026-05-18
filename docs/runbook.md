@@ -56,6 +56,13 @@ Install the service account key into host-local `authorized_keys`:
 kvasir install-service-account-key vakr --apply
 ```
 
+If the service account cannot SSH yet, use an existing sudo-capable bootstrap
+login for the first host-local key install:
+
+```bash
+kvasir install-service-account-key vakr --bootstrap-user nwalker --apply
+```
+
 Then prove the automation path before using it:
 
 ```bash
