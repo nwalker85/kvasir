@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# kvasir enroll-user <username> <email> --first F --last L [--apply]
+#
+# Provisions a new identity in FreeIPA (LDAP source of truth) and Zitadel
+# (web SSO). Saves credentials in 1Password ("FreeIPA <username>" item).
+#
+# Does NOT bootstrap auth factors — run `kvasir add-ssh-key` after the new
+# user logs in once and changes the temporary password.
+
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${KVASIR_DIR}/lib/common.sh"
+source "${KVASIR_DIR}/lib/op.sh"
+source "${KVASIR_DIR}/lib/freeipa.sh"
+source "${KVASIR_DIR}/lib/zitadel.sh"
+
+kvasir::load_env
+kvasir::require_cmd ssh openssl op jq curl
+
+USERNAME="" EMAIL="" FIRST="" LAST=""
+KVASIR_WANT_HELP=0
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    --first) FIRST="$2"; shift 2 ;;
+    --last)  LAST="$2"; shift 2 ;;
+    "")      shift ;;
+    *)
+      if   [[ -z "$USERNAME" ]]; then USERNAME="$1"
+      elif [[ -z "$EMAIL"    ]]; then EMAIL="$1"
+      else kvasir::die "unexpected arg: $1"; fi
+      shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$USERNAME" || -z "$EMAIL" ]]; then
+  cat <<EOF
+Usage: kvasir enroll-user <username> <email> --first F --last L [--apply]
+
+Provisions a user in FreeIPA + Zitadel and stores creds in 1Password.
+
+  USERNAME   short login name (e.g. "jdoe")
+  EMAIL      contact + Zitadel login email
+  --first    given name
+  --last     family name
+  --apply    actually mutate (default: dry-run)
+EOF
+  exit 0
+fi
+
+[[ -z "$FIRST" ]] && kvasir::die "--first is required"
+[[ -z "$LAST"  ]] && kvasir::die "--last is required"
+
+kvasir::log info "user:  ${USERNAME}  (${FIRST} ${LAST})  email=${EMAIL}"
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+# ---------- generate temp password ----------
+TEMP_PW="$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-24)"
+
+# ---------- FreeIPA ----------
+kvasir::log info "[1/3] creating FreeIPA user..."
+ipa::admin_kinit_in_container
+ipa::user_add "$USERNAME" "$FIRST" "$LAST" "$EMAIL" "$TEMP_PW"
+
+# ---------- Zitadel ----------
+kvasir::log info "[2/3] creating Zitadel user..."
+ZID="$(zitadel::user_create "$USERNAME" "$EMAIL" "$FIRST" "$LAST")"
+kvasir::log info "  zitadel userId=${ZID}"
+
+# ---------- 1Password ----------
+kvasir::log info "[3/3] writing creds to 1Password..."
+op::create_item "FreeIPA ${USERNAME}" "${KVASIR_OP_VAULT}" \
+  "username=${USERNAME}" \
+  "concealed:password=${TEMP_PW}" \
+  "url=https://${KVASIR_ZITADEL_HOST}" \
+  "email=${EMAIL}" \
+  "first-name=${FIRST}" \
+  "last-name=${LAST}" \
+  "zitadel-user-id=${ZID}" \
+  "notesPlain=Initial password — user must change at first login. After login, run 'kvasir add-ssh-key --fido2' to register a YubiKey."
+
+kvasir::log info "DONE — ${USERNAME} provisioned. Temp password in 1P; share via secure channel."

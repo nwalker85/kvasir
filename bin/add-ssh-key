@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# kvasir add-ssh-key [--fido2 | --pubkey FILE] [--user USER] [--apply]
+#
+# Generates (or imports) an SSH pubkey and registers it on the FreeIPA user.
+# Also wires up ~/.ssh/config so SSHing as that user uses the key.
+#
+# --fido2  generate a resident FIDO2 ed25519-sk key on the YubiKey (default)
+# --pubkey path to an existing .pub file to upload
+# --user   FreeIPA username to attach key to (default: $USER)
+
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "${KVASIR_DIR}/lib/common.sh"
+source "${KVASIR_DIR}/lib/op.sh"
+source "${KVASIR_DIR}/lib/freeipa.sh"
+
+kvasir::load_env
+kvasir::require_cmd ssh ssh-keygen op
+
+MODE="fido2" PUBKEY_FILE="" IPA_USER="" KEYFILE=""
+KVASIR_WANT_HELP=0
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    --fido2)  MODE="fido2"; shift ;;
+    --pubkey) MODE="import"; PUBKEY_FILE="$2"; shift 2 ;;
+    --user)   IPA_USER="$2"; shift 2 ;;
+    "")       shift ;;
+    *)        kvasir::die "unexpected arg: $1" ;;
+  esac
+done
+
+[[ -z "$IPA_USER" ]] && IPA_USER="${USER}"
+KEYFILE="${HOME}/.ssh/id_ed25519_sk_yubikey"
+
+if (( KVASIR_WANT_HELP )); then
+  cat <<EOF
+Usage: kvasir add-ssh-key [--fido2 | --pubkey FILE] [--user USER] [--apply]
+
+Generates or imports an SSH key and registers it on a FreeIPA user.
+Also adds a 'Match user <user>' block to ~/.ssh/config to drive the key.
+EOF
+  exit 0
+fi
+
+kvasir::log info "user: ${IPA_USER}  mode: ${MODE}"
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+# ---------- Get pubkey ----------
+case "$MODE" in
+  fido2)
+    if [[ -f "$KEYFILE" && -f "${KEYFILE}.pub" ]]; then
+      kvasir::log warn "key already exists at ${KEYFILE} — reusing pubkey"
+    else
+      kvasir::log info "generating FIDO2 ed25519-sk resident key on YubiKey..."
+      kvasir::log warn "  *** TOUCH YOUR YUBIKEY FINGERPRINT WHEN PROMPTED ***"
+      if kvasir::is_dry_run; then
+        kvasir::log info "DRY: ssh-keygen -t ed25519-sk -O resident -O verify-required \
+          -O application=ssh:ravenhelm -C '${USER}-yubikey-$(date +%Y%m%d)' \
+          -f ${KEYFILE}"
+      else
+        # Use brew openssh which has internal sk-helper. Apple ssh lacks FIDO2.
+        /opt/homebrew/bin/ssh-keygen \
+          -t ed25519-sk -O resident -O verify-required \
+          -O application=ssh:ravenhelm \
+          -C "${USER}-yubikey-$(date +%Y%m%d)" \
+          -f "${KEYFILE}" -N ""
+      fi
+    fi
+    PUBKEY="$(< "${KEYFILE}.pub")"
+    ;;
+  import)
+    [[ ! -f "$PUBKEY_FILE" ]] && kvasir::die "pubkey file not found: $PUBKEY_FILE"
+    PUBKEY="$(< "$PUBKEY_FILE")"
+    ;;
+esac
+
+PUBKEY="${PUBKEY%$'\n'}"
+kvasir::log info "  pubkey fp: $(ssh-keygen -lf <(echo "$PUBKEY") 2>/dev/null | awk '{print $2}')"
+
+# ---------- Push to FreeIPA ----------
+kvasir::log info "registering pubkey on FreeIPA user ${IPA_USER}..."
+ipa::admin_kinit_in_container
+ipa::user_addsshpubkey "$IPA_USER" "$PUBKEY"
+
+# ---------- Wire ~/.ssh/config ----------
+SSH_CONFIG="${HOME}/.ssh/config"
+MARK_BEGIN="# >>> kvasir Match ${IPA_USER} >>>"
+MARK_END="# <<< kvasir Match ${IPA_USER} <<<"
+
+BLOCK="${MARK_BEGIN}
+# FreeIPA logins — YubiKey FIDO2 resident key (touch fingerprint to auth).
+# Bypass 1Password agent: SK key lives on the YubiKey, not in the agent.
+# Use brew openssh — Apple ssh lacks FIDO2.
+Match user ${IPA_USER}
+  IdentityAgent none
+  IdentityFile ${KEYFILE}
+  IdentitiesOnly yes
+${MARK_END}"
+
+if grep -qF "${MARK_BEGIN}" "${SSH_CONFIG}" 2>/dev/null; then
+  kvasir::log warn "ssh config already has kvasir Match block for ${IPA_USER} — leaving alone"
+elif grep -qE "^[[:space:]]*Match user ${IPA_USER}\b" "${SSH_CONFIG}" 2>/dev/null; then
+  kvasir::log warn "ssh config has a manual 'Match user ${IPA_USER}' block (no kvasir markers) — leaving alone; review by hand if you want kvasir to manage it"
+else
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: append Match user ${IPA_USER} block to ${SSH_CONFIG}"
+  else
+    printf "\n%s\n" "${BLOCK}" >> "${SSH_CONFIG}"
+    kvasir::log info "ssh config updated: ${SSH_CONFIG}"
+  fi
+fi
+
+kvasir::log info "DONE — ${IPA_USER}'s SSH key registered. Test: ssh ${IPA_USER}@<freeipa-host>"

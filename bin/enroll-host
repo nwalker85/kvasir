@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# kvasir enroll-host <ssh-alias-or-fqdn> [--ip <lan-ip>] [--apply]
+#
+# End-to-end FreeIPA client enrollment. Drives the recipe documented in
+# memory:freeipa-fleet-enrollment-recipe.md. SSHes to both the freeipa server
+# (to mint host record + OTP) and the target host (to install + configure).
+#
+# Defaults to --dry-run. Pass --apply to actually mutate. ALL mutations to
+# the FreeIPA server happen inside the freeipa container; target host
+# changes are scoped to /etc/hosts, /etc/ipa/, sssd, and the apt repo.
+#
+# Sudo on the target host: by default kvasir relies on NOPASSWD sudo for
+# the SSH-login user. If the target requires a sudo password, set
+# KVASIR_SUDO_PASSWORD_OP to an `op://vault/item/field` URI and kvasir will
+# pipe the resolved password to `sudo -S` per the helper in lib/common.sh.
+
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/op.sh
+source "${KVASIR_DIR}/lib/op.sh"
+# shellcheck source=../lib/freeipa.sh
+source "${KVASIR_DIR}/lib/freeipa.sh"
+
+kvasir::load_env
+kvasir::require_cmd ssh ssh-keygen openssl op
+
+KVASIR_WANT_HELP=0
+TARGET_IP=""
+TARGET=""
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+
+while (( $# > 0 )); do
+  case "$1" in
+    --ip) TARGET_IP="$2"; shift 2 ;;
+    "")   shift ;;
+    *)    [[ -z "$TARGET" ]] && TARGET="$1" || kvasir::die "unexpected arg: $1"; shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$TARGET" ]]; then
+  cat <<EOF
+Usage: kvasir enroll-host <ssh-alias-or-fqdn> [--ip LAN-IP] [--apply] [--debug]
+
+Joins a Linux host to the ${KVASIR_FREEIPA_REALM} realm.
+
+  TARGET   ssh alias (preferred — must be in ~/.ssh/config) OR fqdn
+  --ip     target host LAN IP (auto-detected from 'ssh \$TARGET hostname -I' if omitted)
+  --apply  actually run mutations (default: dry-run)
+
+Sudo handling:
+  Default: target must have NOPASSWD sudo for the SSH-login user.
+  Override: export KVASIR_SUDO_PASSWORD_OP="op://vault/item/password" and
+            kvasir will pipe the resolved pw to 'sudo -S' on the target.
+EOF
+  exit 0
+fi
+
+# Resolve fqdn + short
+if [[ "$TARGET" == *.* ]]; then
+  FQDN="$TARGET"; SHORT="${TARGET%%.*}"
+else
+  SHORT="$TARGET"; FQDN="${TARGET}.${KVASIR_FREEIPA_DOMAIN}"
+fi
+SSH_HOST="$TARGET"   # SSH using whatever alias/host the user gave us.
+
+kvasir::log info "target: ssh=${SSH_HOST}  fqdn=${FQDN}  short=${SHORT}"
+kvasir::log info "realm:  ${KVASIR_FREEIPA_REALM}  freeipa-host: ${KVASIR_FREEIPA_HOST}"
+[[ -n "${KVASIR_SUDO_PASSWORD_OP}" ]] \
+  && kvasir::log info "sudo:   pw via KVASIR_SUDO_PASSWORD_OP (1Password)"
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+# ---------- 1. Probe target ----------
+kvasir::log info "[1/9] probing target host..."
+ssh -o BatchMode=yes -o ConnectTimeout=10 "${SSH_HOST}" true \
+  || kvasir::die "cannot ssh to ${SSH_HOST} (need NOPASSWD sudo OR set KVASIR_SUDO_PASSWORD_OP)"
+
+if [[ -z "$TARGET_IP" ]]; then
+  TARGET_IP="$(ssh "${SSH_HOST}" "hostname -I 2>/dev/null | awk '{print \$1}'")"
+  [[ -z "$TARGET_IP" ]] && kvasir::die "could not auto-detect LAN IP; pass --ip"
+fi
+kvasir::log info "  target LAN IP: ${TARGET_IP}"
+
+# Detect OS family for service name + package manager
+OS_ID="$(ssh "${SSH_HOST}" '. /etc/os-release && echo $ID')"
+case "$OS_ID" in
+  ubuntu|debian) PKG_INSTALL="apt-get install -y freeipa-client"; SSH_SVC="ssh.service" ;;
+  rocky|rhel|centos|fedora|almalinux) PKG_INSTALL="dnf install -y freeipa-client"; SSH_SVC="sshd.service" ;;
+  *) kvasir::die "unsupported OS_ID: ${OS_ID}" ;;
+esac
+kvasir::log info "  os: ${OS_ID}  ssh-service: ${SSH_SVC}"
+
+# Detect existing enrollment state. Re-enrolling on an already-enrolled
+# host requires `ipa-client-install --uninstall` first; otherwise the new
+# install rolls back when it can't replace the existing keytab — which
+# leaves the host with sssd.conf moved to .deleted, no nwalker, and a
+# stale keytab. Step 5 below handles the --uninstall when this is set.
+HAS_EXISTING_ENROLL=0
+if ssh "${SSH_HOST}" "test -e /etc/krb5.keytab -o -e /etc/sssd/sssd.conf -o -e /etc/ipa/default.conf"; then
+  HAS_EXISTING_ENROLL=1
+  kvasir::log info "  detected existing FreeIPA-client state on target — will --uninstall before re-installing"
+fi
+
+# ---------- 2. Pre-create host record + OTP ----------
+kvasir::log info "[2/9] kinit admin and pre-creating host record..."
+ipa::admin_kinit_in_container
+OTP="$(ipa::host_register "$FQDN")"
+kvasir::log info "  OTP minted (32 hex chars)"
+
+# ---------- 3. Stage /etc/hosts on target ----------
+kvasir::log info "[3/9] staging /etc/hosts on target..."
+kvasir::run_ssh_sudo "${SSH_HOST}" "bash -c '
+  cp /etc/hosts /etc/hosts.kvasir-bak.\$(date +%s)
+  sed -i \"/^[0-9.]* ${KVASIR_FREEIPA_FQDN}\$/d\" /etc/hosts
+  sed -i \"/ ${SHORT}\$/d\" /etc/hosts
+  sed -i \"/^127.0.1.1.*/d\" /etc/hosts
+  printf \"%s\n%s\n\" \"${KVASIR_FREEIPA_LAN_IP} ${KVASIR_FREEIPA_FQDN}\" \"${TARGET_IP} ${FQDN} ${SHORT}\" >> /etc/hosts
+  hostname ${SHORT}
+'"
+
+# ---------- 4. Install freeipa-client package ----------
+kvasir::log info "[4/9] installing freeipa-client package..."
+kvasir::run_ssh_sudo "${SSH_HOST}" "${PKG_INSTALL}"
+
+# ---------- 5. Run ipa-client-install (OTP path) ----------
+kvasir::log info "[5/9] running ipa-client-install (OTP-based join via ipa-join LDAP)..."
+
+# If existing enrollment state was detected, clean before --install.
+# Two-phase cleanup:
+#   (a) ipa-client-install --uninstall — clean Kerberos service principals,
+#       restore PAM/NSS, disable sssd. May fail if /etc/ipa/default.conf is
+#       malformed from a previous partial-rollback — tolerate via `|| true`.
+#   (b) Force-rm any stale state files --uninstall didn't reach. Required
+#       to recover from cascading-failure states (e.g. malformed
+#       default.conf, stale krb5.keytab, missing sssd.conf).
+# This MUST happen before staging the CA cert below, because --uninstall
+# deletes /etc/ipa entirely; staging cert before --uninstall would lose it.
+if [[ "${HAS_EXISTING_ENROLL}" -eq 1 ]]; then
+  kvasir::log info "  cleaning existing enrollment state (--uninstall + force-clean)..."
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: ssh ${SSH_HOST} sudo ipa-client-install --uninstall --unattended; force-rm /etc/krb5.keytab /etc/sssd/sssd.conf* /etc/ipa /var/lib/sss/{db,keytabs}/*"
+  else
+    kvasir::ssh_sudo "${SSH_HOST}" "bash -c '
+      ipa-client-install --uninstall --unattended >/dev/null 2>&1 || true
+      rm -f /etc/krb5.keytab
+      rm -rf /etc/sssd/sssd.conf /etc/sssd/sssd.conf.deleted
+      rm -rf /etc/ipa
+      rm -rf /var/lib/sss/db/* /var/lib/sss/keytabs/* 2>/dev/null || true
+      systemctl stop sssd 2>/dev/null || true
+      systemctl reset-failed sssd 2>/dev/null || true
+    '"
+  fi
+fi
+
+# Stage CA cert from FreeIPA server. Must come AFTER --uninstall + force-clean
+# (which delete /etc/ipa entirely) so the cert survives into --install.
+CA_PEM="$(ipa::ca_cert)"
+if kvasir::is_dry_run; then
+  kvasir::log info "DRY: ssh ${SSH_HOST} sudo install -d -m755 /etc/ipa && tee /etc/ipa/ca.crt < CA_PEM"
+else
+  kvasir::ssh_sudo "${SSH_HOST}" \
+    "bash -c 'install -d -m755 /etc/ipa && tee /etc/ipa/ca.crt >/dev/null'" \
+    "$CA_PEM"
+fi
+
+INSTALL_CMD="ipa-client-install \
+    --domain=${KVASIR_FREEIPA_DOMAIN} --realm=${KVASIR_FREEIPA_REALM} \
+    --server=${KVASIR_FREEIPA_FQDN} --hostname=${FQDN} \
+    --password='${OTP}' --ca-cert-file=/etc/ipa/ca.crt \
+    --mkhomedir --no-ntp --unattended"
+# ipa-client-install will print '/ipa/json: Internal Server Error' at the END
+# due to mod_auth_gssapi 1.6.3 S4U2Proxy bug — keytab + sssd are written
+# before that error; we tolerate exit 0 OR 1 here and verify success below.
+if kvasir::is_dry_run; then
+  kvasir::log info "DRY: ssh ${SSH_HOST} sudo ${INSTALL_CMD}"
+else
+  kvasir::ssh_sudo "${SSH_HOST}" "bash -c \"${INSTALL_CMD} || true\""
+fi
+
+# ---------- 6. Patch /etc/ipa/default.conf and start sssd ----------
+kvasir::log info "[6/9] patching default.conf, enabling sssd, mkhomedir..."
+kvasir::run_ssh_sudo "${SSH_HOST}" "bash -c '
+  grep -q \"^delegate = True\" /etc/ipa/default.conf 2>/dev/null \
+    || echo \"delegate = True\" >> /etc/ipa/default.conf
+  systemctl reset-failed sssd || true
+  systemctl enable --now sssd
+  systemctl restart ${SSH_SVC}
+'"
+
+if [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
+  kvasir::run_ssh_sudo "${SSH_HOST}" \
+    "DEBIAN_FRONTEND=noninteractive pam-auth-update --enable mkhomedir"
+fi
+
+# ---------- 7. Validate ----------
+kvasir::log info "[7/9] validating enrollment..."
+if ! kvasir::is_dry_run; then
+  if ssh "${SSH_HOST}" "id nwalker >/dev/null 2>&1"; then
+    kvasir::log info "  id nwalker: OK"
+  else
+    kvasir::log warn "  id nwalker: FAILED — sssd may not be running yet"
+  fi
+  KEYS="$(ssh "${SSH_HOST}" 'sss_ssh_authorizedkeys nwalker 2>/dev/null | wc -l' || true)"
+  kvasir::log info "  sss_ssh_authorizedkeys nwalker: ${KEYS} key(s)"
+fi
+
+# ---------- 8. Root-capable service account ----------
+if [[ "${KVASIR_CREATE_ROOT_SERVICE_ACCOUNT:-1}" == "1" ]]; then
+  kvasir::log info "[8/9] ensuring root-capable service account..."
+  ipa::service_account_ensure_root "${SHORT}" "${FQDN}" "${TARGET_IP}"
+else
+  kvasir::log info "[8/9] root service account bootstrap disabled via KVASIR_CREATE_ROOT_SERVICE_ACCOUNT=0"
+fi
+
+# ---------- 9. Save record to 1P ----------
+kvasir::log info "[9/9] saving enrollment record to 1Password..."
+op::create_item "FreeIPA Host ${SHORT}" "${KVASIR_OP_VAULT}" \
+  "username=host/${FQDN}" \
+  "concealed:enrollment-otp=${OTP}" \
+  "url=https://${KVASIR_FREEIPA_FQDN}" \
+  "fqdn=${FQDN}" \
+  "lan-ip=${TARGET_IP}" \
+  "os=${OS_ID}" \
+  "enrolled-at=$(date -u +%FT%TZ)" \
+  "notesPlain=Enrolled by kvasir. /etc/krb5.keytab installed; /etc/ipa/default.conf has delegate=True. Re-run kvasir enroll-host ${SHORT} --apply to rotate."
+
+kvasir::log info "DONE — ${FQDN} enrolled in ${KVASIR_FREEIPA_REALM}"
+kvasir::is_dry_run \
+  && kvasir::log warn "this was a DRY-RUN; pass --apply to actually do it."

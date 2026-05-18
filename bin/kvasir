@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# kvasir — entrypoint dispatcher.
+#   kvasir enroll-host <target> [...]
+#   kvasir service-account <target> [...]
+#   kvasir verify-service-account <target>
+#   kvasir enroll-user <name> <email> --first F --last L
+#   kvasir add-ssh-key [--fido2 | --pubkey FILE]
+#   kvasir version
+set -euo pipefail
+KVASIR_BIN="$(cd "$(dirname "$0")" && pwd)"
+
+case "${1:-}" in
+  ""|-h|--help|help)
+    cat <<EOF
+kvasir — Ravenhelm identity-onboarding automation.
+
+Usage: kvasir <command> [args...]
+
+Commands:
+  enroll-host <target> [--ip IP] [--apply]
+      Joins a Linux host to the FreeIPA realm.
+
+  service-account <target> [--ip IP] [--apply]
+      Ensures the host-scoped root service account and sudo rule exist.
+
+  verify-service-account <target>
+      Verifies SSH login and passwordless sudo for a host service account.
+
+  enroll-user <user> <email> --first F --last L [--apply]
+      Provisions an identity in FreeIPA + Zitadel + 1P.
+
+  add-ssh-key [--fido2 | --pubkey FILE] [--user USER] [--apply]
+      Generates/imports an SSH key and registers it on a FreeIPA user.
+
+  version
+      Print version and resolved configuration.
+
+Flags accepted by all commands:
+  --apply     actually mutate (default: dry-run)
+  --debug     verbose logging
+  --quiet     warn+ only
+  -h/--help   per-command help
+
+See docs/runbook.md for the full onboarding flow.
+EOF
+    ;;
+  version)
+    echo "kvasir 0.1.0"
+    echo "root: ${KVASIR_BIN%/*}"
+    ;;
+  enroll-host|service-account|verify-service-account|enroll-user|add-ssh-key)
+    cmd="$1"; shift
+    exec "${KVASIR_BIN}/${cmd}" "$@"
+    ;;
+  *)
+    echo "unknown command: $1" >&2
+    echo "run 'kvasir help' for usage" >&2
+    exit 64
+    ;;
+esac
