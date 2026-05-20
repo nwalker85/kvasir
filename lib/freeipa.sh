@@ -44,7 +44,7 @@ ipa::docker_exec() {
       fi
     else
       if [[ -n "$stdin" ]]; then
-        ssh -o BatchMode=yes -o ConnectTimeout=8 "${host}" "docker exec '${KVASIR_FREEIPA_CONTAINER}' bash -lc '${cmd}'" <<<"$stdin"
+        ssh -o BatchMode=yes -o ConnectTimeout=8 "${host}" "docker exec -i '${KVASIR_FREEIPA_CONTAINER}' bash -lc '${cmd}'" <<<"$stdin"
       else
         ssh -o BatchMode=yes -o ConnectTimeout=8 "${host}" "docker exec '${KVASIR_FREEIPA_CONTAINER}' bash -lc '${cmd}'"
       fi
@@ -206,6 +206,17 @@ ipa::service_account_bootstrap_root() {
   ipa::service_account_attach_root_credentials "$uid" "$ssh_pubkey" "$cert"
 }
 
+ipa::cmd_idempotent() {
+  local out rc
+  out=$(ipa::cmd "$@" 2>&1) && return 0 || rc=$?
+  if grep -qiE 'already|duplicate|no modifications|no changes were made' <<<"$out"; then
+    return 0
+  fi
+  kvasir::log error "freeipa command failed: ipa $*"
+  kvasir::log error "$out"
+  return "$rc"
+}
+
 # Create or refresh a host-scoped sudo rule that grants passwordless root.
 # Args: <rule-name> <uid> <host-fqdn>
 ipa::service_account_bootstrap_root_sudo() {
@@ -228,14 +239,14 @@ ipa::service_account_bootstrap_root_sudo() {
 
   if kvasir::is_dry_run; then
     kvasir::log info "DRY: ipa sudorule-add-user ${rule} --users=${uid}"
-    kvasir::log info "DRY: ipa sudorule-add-host ${rule} --host=${host}"
+    kvasir::log info "DRY: ipa sudorule-add-host ${rule} --hosts=${host}"
     kvasir::log info "DRY: ipa sudorule-add-option ${rule} --sudooption='!authenticate'"
     return 0
   fi
 
-  ipa::cmd sudorule-add-user "$rule" --users="$uid" >/dev/null 2>&1 || true
-  ipa::cmd sudorule-add-host "$rule" --host="$host" >/dev/null 2>&1 || true
-  ipa::cmd sudorule-add-option "$rule" --sudooption='!authenticate' >/dev/null 2>&1 || true
+  ipa::cmd_idempotent sudorule-add-user "$rule" --users="$uid" >/dev/null
+  ipa::cmd_idempotent sudorule-add-host "$rule" --hosts="$host" >/dev/null
+  ipa::cmd_idempotent sudorule-add-option "$rule" --sudooption='!authenticate' >/dev/null
 }
 
 # Ensure the host-scoped root service account exists and is wired for the
@@ -353,8 +364,9 @@ ipa::user_add() {
     kvasir::log info "DRY: ipa user-add ${user} --first=${first} --last=${last} --email=${email}"
     return 0
   fi
+  # shellcheck disable=SC2029
   ssh "${KVASIR_FREEIPA_HOST}" \
-    "docker exec '${KVASIR_FREEIPA_CONTAINER}' ipa user-add '${user}' \
+    "docker exec -i '${KVASIR_FREEIPA_CONTAINER}' ipa user-add '${user}' \
         --first='${first}' --last='${last}' --email='${email}' \
         --password" <<<"$pw" >/dev/null \
     || kvasir::die "ipa user-add ${user} failed"

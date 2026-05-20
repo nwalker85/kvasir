@@ -2,6 +2,7 @@
 # kvasir — entrypoint dispatcher.
 #   kvasir enroll-host <target> [...]
 #   kvasir service-account <target> [...]
+#   kvasir install-service-account-key <target> [...]
 #   kvasir verify-service-account <target>
 #   kvasir enroll-user <name> <email> --first F --last L
 #   kvasir add-ssh-key [--fido2 | --pubkey FILE]
@@ -23,7 +24,10 @@ Commands:
   service-account <target> [--ip IP] [--apply]
       Ensures the host-scoped root service account and sudo rule exist.
 
-  verify-service-account <target>
+  install-service-account-key <target> [--ssh-host HOST] [--bootstrap-user USER] [--apply]
+      Installs the service account key into host-local authorized_keys.
+
+  verify-service-account <target> [--ssh-host HOST] [--probe-user USER]
       Verifies SSH login and passwordless sudo for a host service account.
 
   enroll-user <user> <email> --first F --last L [--apply]
@@ -48,7 +52,7 @@ EOF
     echo "kvasir 0.1.0"
     echo "root: ${KVASIR_BIN%/*}"
     ;;
-  enroll-host|service-account|verify-service-account|enroll-user|add-ssh-key)
+  enroll-host|service-account|install-service-account-key|verify-service-account|enroll-user|add-ssh-key)
     cmd="$1"; shift
     exec "${KVASIR_BIN}/${cmd}" "$@"
     ;;

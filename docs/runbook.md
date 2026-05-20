@@ -50,6 +50,19 @@ If you only need to refresh the service-account side later, use:
 kvasir service-account vakr --apply
 ```
 
+Install the service account key into host-local `authorized_keys`:
+
+```bash
+kvasir install-service-account-key vakr --apply
+```
+
+If the service account cannot SSH yet, use an existing sudo-capable bootstrap
+login for the first host-local key install:
+
+```bash
+kvasir install-service-account-key vakr --bootstrap-user nwalker --apply
+```
+
 Then prove the automation path before using it:
 
 ```bash
@@ -58,8 +71,16 @@ kvasir verify-service-account vakr
 
 The verifier is read-only. It checks the `FreeIPA Root Host <short>` 1Password
 item, SSH reachability, `getent passwd svc-<host>-root`,
-`sss_ssh_authorizedkeys svc-<host>-root`, service-account SSH login with the
-stored bootstrap key, and `sudo -n true`.
+`sss_ssh_authorizedkeys svc-<host>-root`, host-local `authorized_keys`,
+service-account SSH login with the stored bootstrap key, and `sudo -n true`.
+
+If the host identity and SSH route differ, keep the target as the identity host
+and override only the network path:
+
+```bash
+kvasir install-service-account-key grani --ssh-host 100.106.47.41 --apply
+kvasir verify-service-account grani --ssh-host 100.106.47.41
+```
 
 ### Common issues
 
@@ -67,6 +88,7 @@ stored bootstrap key, and `sudo -n true`.
 - **`/etc/ipa/ca.crt: No such file or directory`** — happens if a previous failed `ipa-client-install` rolled back. Re-run `kvasir enroll-host <host> --apply`; step 4 re-stages the cert.
 - **`host record exists but enrollment fails`** — the OTP is single-use. Re-running rotates it via `host-mod --password=<new-otp>`.
 - **`verify-service-account` shows `0 keys`** — re-run `kvasir service-account <host> --apply`, then verify sshd is using SSSD authorized-key lookup.
+- **`verify-service-account` shows missing host `authorized_keys`** — run `kvasir install-service-account-key <host> --apply` or pass `--ssh-host` if the route differs from the host identity.
 - **`verify-service-account` shows `sudo -n true` failed** — refresh the host sudo rule with `kvasir service-account <host> --apply`, then clear/restart the target SSSD sudo cache.
 
 ## Provisioning a new user

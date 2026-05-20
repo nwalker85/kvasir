@@ -30,7 +30,11 @@ op::create_item() {
   local args=()
   for kv in "$@"; do
     if [[ "$kv" == concealed:* ]]; then
-      args+=( "${kv#concealed:}[password]" )
+      local concealed_kv field value
+      concealed_kv="${kv#concealed:}"
+      field="${concealed_kv%%=*}"
+      value="${concealed_kv#*=}"
+      args+=( "${field}[password]=${value}" )
     else
       args+=( "$kv" )
     fi
