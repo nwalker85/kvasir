@@ -233,3 +233,34 @@ EOF
   '"
   kvasir::log info "  /etc/krb5.conf staged on ${host}"
 }
+
+# Mint host keytab via ipa::host_keytab, decode, install at /etc/krb5.keytab.
+# Caller must have run ipa::admin_kinit_in_container first.
+# Args: <ssh-host> <fqdn>
+mac::install_host_keytab() {
+  local host="$1" fqdn="$2"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would mint host keytab for ${fqdn} and install at ${host}:/etc/krb5.keytab"
+    return 0
+  fi
+
+  local keytab_b64
+  keytab_b64="$(ipa::host_keytab "$fqdn")" \
+    || kvasir::die "ipa::host_keytab failed for ${fqdn}"
+  [[ -n "$keytab_b64" ]] || kvasir::die "ipa::host_keytab returned empty for ${fqdn}"
+
+  # Pipe base64 through ssh; decode on target and install atomically.
+  printf '%s' "$keytab_b64" | kvasir::ssh_sudo "$host" "bash -c '
+    base64 -D > /tmp/kvasir.keytab
+    chmod 0600 /tmp/kvasir.keytab
+    install -m 0600 -o root -g wheel /tmp/kvasir.keytab /etc/krb5.keytab
+    rm -f /tmp/kvasir.keytab
+  '"
+
+  # Validate principal landed
+  local found
+  found="$(ssh "$host" "sudo klist -k /etc/krb5.keytab 2>/dev/null | grep -c 'host/${fqdn}'")"
+  (( found > 0 )) || kvasir::die "host principal not found in keytab after install"
+  kvasir::log info "  /etc/krb5.keytab installed; host/${fqdn} principal present"
+}
