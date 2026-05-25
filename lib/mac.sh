@@ -204,3 +204,32 @@ mac::probe_target() {
 
   printf '%s|%s\n' "$sw_vers" "$ip"
 }
+
+# Stage /etc/krb5.conf on target. Backs up any pre-existing non-kvasir file.
+# Args: <ssh-host>
+mac::stage_krb5_conf() {
+  local host="$1"
+  local content
+  content="$(mac::_render_krb5_conf \
+    "${KVASIR_FREEIPA_REALM}" \
+    "${KVASIR_FREEIPA_DOMAIN}" \
+    "${KVASIR_FREEIPA_FQDN}")"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would write /etc/krb5.conf on ${host} (backup pre-existing)"
+    return 0
+  fi
+
+  # Backup if existing AND not kvasir-managed
+  kvasir::ssh_sudo "$host" "bash -c '
+    if [[ -f /etc/krb5.conf ]] && ! grep -q \"Managed by kvasir\" /etc/krb5.conf; then
+      cp /etc/krb5.conf /etc/krb5.conf.kvasir-bak.\$(date +%s)
+    fi
+    cat > /etc/krb5.conf.kvasir-tmp <<\"EOF\"
+${content}
+EOF
+    install -m 0644 -o root -g wheel /etc/krb5.conf.kvasir-tmp /etc/krb5.conf
+    rm -f /etc/krb5.conf.kvasir-tmp
+  '"
+  kvasir::log info "  /etc/krb5.conf staged on ${host}"
+}
