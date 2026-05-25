@@ -377,3 +377,17 @@ ipa::user_add() {
 ipa::ca_cert() {
   ipa::docker_exec "cat /etc/ipa/ca.crt"
 }
+
+# Mint a fresh host keytab for $FQDN inside the freeipa container and emit
+# it as base64 on stdout. Caller must have run ipa::admin_kinit_in_container
+# first (so ipa-getkeytab can authenticate). Each call rotates the host's
+# kvno — matches Linux enroll-host's re-run-as-rotation semantics.
+# Args: <fqdn>
+ipa::host_keytab() {
+  local fqdn="$1"
+  local cmd
+  cmd="ipa-getkeytab -p host/${fqdn} -k /tmp/${fqdn}.keytab >/dev/null"
+  cmd+=" && base64 < /tmp/${fqdn}.keytab"
+  cmd+=" && rm -f /tmp/${fqdn}.keytab"
+  ipa::docker_exec "$cmd"
+}
