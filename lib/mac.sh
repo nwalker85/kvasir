@@ -184,3 +184,23 @@ mac::_should_refresh() {
     return 2
   fi
 }
+
+# ---------- enrollment steps ----------
+
+# Probe the target: confirm Darwin, capture sw_vers + IP.
+# Args: <ssh-host>
+# Echoes a single line: "<sw_vers>|<lan-ip>"
+mac::probe_target() {
+  local host="$1"
+  local kernel
+  kernel="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'uname -s')" \
+    || kvasir::die "cannot ssh to ${host}"
+  [[ "$kernel" == "Darwin" ]] || kvasir::die "mac::probe_target: expected Darwin, got ${kernel}"
+
+  local sw_vers ip
+  sw_vers="$(ssh "$host" 'sw_vers -productVersion 2>/dev/null')"
+  ip="$(ssh "$host" 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null')"
+  [[ -n "$ip" ]] || kvasir::die "mac::probe_target: could not detect LAN IP on en0/en1"
+
+  printf '%s|%s\n' "$sw_vers" "$ip"
+}
