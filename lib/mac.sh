@@ -468,3 +468,38 @@ mac::enroll() {
 
   kvasir::log info "DONE — ${fqdn} enrolled in ${KVASIR_FREEIPA_REALM} (macOS)"
 }
+
+# ---------- uninstall / rollback ----------
+
+# Reverse the enrollment. Not yet exposed as a subcommand; call directly
+# from a recovery shell: source lib/common.sh + lib/mac.sh, then
+# mac::uninstall <host> <short>.
+# Args: <ssh-host> <short-hostname>
+mac::uninstall() {
+  local host="$1" short="$2"
+  local plist_path="/Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would unbind LDAP, remove keytab principal, delete sudoers fragment on ${host}"
+    return 0
+  fi
+
+  kvasir::ssh_sudo "$host" "bash -c '
+    # Unbind LDAP
+    dscl /Search -delete / CSPSearchPath \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\" 2>/dev/null || true
+    dscl /Search/Contacts -delete / CSPSearchPath \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\" 2>/dev/null || true
+    rm -f \"${plist_path}\"
+    killall opendirectoryd 2>/dev/null || true
+
+    # Remove host keytab (next enroll reinstalls)
+    rm -f /etc/krb5.keytab
+
+    # Remove kvasir-managed sudoers fragment
+    rm -f /etc/sudoers.d/kvasir-managed-${short}
+
+    # Restore most recent krb5.conf backup if any
+    latest_krb5=\$(ls -t /etc/krb5.conf.kvasir-bak.* 2>/dev/null | head -1)
+    [[ -n \"\$latest_krb5\" ]] && mv \"\$latest_krb5\" /etc/krb5.conf || true
+  '"
+  kvasir::log info "  uninstall complete; local users untouched"
+}
