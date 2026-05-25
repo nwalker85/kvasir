@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT}/lib/common.sh"
+source "${ROOT}/lib/op.sh"
+source "${ROOT}/lib/freeipa.sh"
 source "${ROOT}/lib/mac.sh"
 
 # ---- mac::_render_krb5_conf ----
@@ -115,6 +117,32 @@ test::render_sudoers::has_managed_header() {
   printf 'PASS: render_sudoers::has_managed_header\n'
 }
 
+# ---- mac::_verify_ipa_sudo_rule_exists ----
+test::verify_ipa_sudo_rule_exists::returns_ok_when_present() {
+  ipa::cmd() {
+    if [[ "$1" == "sudorule-show" && "$2" == "kvasir-root-odin" ]]; then
+      printf 'Rule name: kvasir-root-odin\n'
+      return 0
+    fi
+    return 1
+  }
+  if mac::_verify_ipa_sudo_rule_exists "odin"; then
+    printf 'PASS: verify_ipa_sudo_rule_exists::returns_ok_when_present\n'
+  else
+    printf 'FAIL: should have returned 0\n' >&2
+    return 1
+  fi
+}
+
+test::verify_ipa_sudo_rule_exists::fails_when_absent() {
+  ipa::cmd() { return 1; }
+  if mac::_verify_ipa_sudo_rule_exists "ghost"; then
+    printf 'FAIL: should have returned nonzero\n' >&2
+    return 1
+  fi
+  printf 'PASS: verify_ipa_sudo_rule_exists::fails_when_absent\n'
+}
+
 test::render_krb5_conf::has_default_realm
 test::render_krb5_conf::has_realms_section
 test::render_krb5_conf::has_domain_realm_mapping
@@ -125,3 +153,5 @@ test::render_ldap_plist::has_tls_enabled
 test::render_sudoers::passes_visudo
 test::render_sudoers::grants_nopasswd
 test::render_sudoers::has_managed_header
+test::verify_ipa_sudo_rule_exists::returns_ok_when_present
+test::verify_ipa_sudo_rule_exists::fails_when_absent

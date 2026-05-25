@@ -144,3 +144,13 @@ mac::_render_sudoers_fragment() {
 ${user} ALL=(root) NOPASSWD: ALL
 EOF
 }
+
+# Confirm that an IPA sudo rule kvasir-root-<short> exists. Returns 0 if
+# present, nonzero otherwise. Used as a precheck before writing the local
+# sudoers fragment — if the rule isn't there, the IPA host record probably
+# wasn't bootstrapped properly and we shouldn't grant local root.
+# Args: <short-hostname>
+mac::_verify_ipa_sudo_rule_exists() {
+  local short="$1"
+  ipa::cmd sudorule-show "kvasir-root-${short}" >/dev/null 2>&1
+}
