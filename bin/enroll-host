@@ -78,13 +78,26 @@ kvasir::log info "[1/9] probing target host..."
 ssh -o BatchMode=yes -o ConnectTimeout=10 "${SSH_HOST}" true \
   || kvasir::die "cannot ssh to ${SSH_HOST} (need NOPASSWD sudo OR set KVASIR_SUDO_PASSWORD_OP)"
 
+# Detect OS kernel. macOS hosts get the Darwin path (lib/mac.sh) and
+# return before Linux-specific probing runs.
+OS_KERNEL="$(ssh "${SSH_HOST}" 'uname -s')"
+if [[ "$OS_KERNEL" == "Darwin" ]]; then
+  # shellcheck source=../lib/mac.sh
+  source "${KVASIR_DIR}/lib/mac.sh"
+  kvasir::log info "  os: darwin (delegating to lib/mac.sh)"
+  mac::enroll "${SSH_HOST}" "${FQDN}" "${SHORT}" "${TARGET_IP}"
+  kvasir::is_dry_run && kvasir::log warn "this was a DRY-RUN; pass --apply to actually do it."
+  exit 0
+fi
+
+# Linux from here on. Auto-detect LAN IP if not supplied via --ip.
+# hostname -I is Linux-only; Darwin hosts exit above before reaching this.
 if [[ -z "$TARGET_IP" ]]; then
   TARGET_IP="$(ssh "${SSH_HOST}" "hostname -I 2>/dev/null | awk '{print \$1}'")"
   [[ -z "$TARGET_IP" ]] && kvasir::die "could not auto-detect LAN IP; pass --ip"
 fi
 kvasir::log info "  target LAN IP: ${TARGET_IP}"
 
-# Detect OS family for service name + package manager
 OS_ID="$(ssh "${SSH_HOST}" '. /etc/os-release && echo $ID')"
 case "$OS_ID" in
   ubuntu|debian) PKG_INSTALL="apt-get install -y freeipa-client"; SSH_SVC="ssh.service" ;;
