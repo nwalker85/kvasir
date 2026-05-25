@@ -288,3 +288,43 @@ mac::stage_ca_cert() {
   '"
   kvasir::log info "  /etc/openldap/cacert.pem installed"
 }
+
+# Write the LDAPv3 plist, add to opendirectoryd's CSPSearchPath, reload.
+# Args: <ssh-host>
+mac::bind_ldap() {
+  local host="$1"
+  local plist_path="/Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist"
+  local content
+  content="$(mac::_render_ldap_plist "${KVASIR_FREEIPA_FQDN}" "${KVASIR_FREEIPA_DOMAIN}")"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would write ${plist_path}, append to CSPSearchPath, reload opendirectoryd"
+    return 0
+  fi
+
+  # Write plist + ensure parent dir
+  kvasir::ssh_sudo "$host" "bash -c '
+    install -d -m 0755 /Library/Preferences/OpenDirectory/Configurations/LDAPv3
+    cat > /tmp/kvasir.ldap.plist <<\"EOF\"
+${content}
+EOF
+    plutil -lint /tmp/kvasir.ldap.plist >/dev/null
+    install -m 0600 -o root -g wheel /tmp/kvasir.ldap.plist \"${plist_path}\"
+    rm -f /tmp/kvasir.ldap.plist
+  '"
+
+  # Add to search path if not already there
+  kvasir::ssh_sudo "$host" "bash -c '
+    if ! dscl /Search -read / CSPSearchPath 2>/dev/null | grep -q \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\"; then
+      dscl /Search -append / CSPSearchPath \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\"
+    fi
+    if ! dscl /Search/Contacts -read / CSPSearchPath 2>/dev/null | grep -q \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\"; then
+      dscl /Search/Contacts -append / CSPSearchPath \"/LDAPv3/${KVASIR_FREEIPA_FQDN}\"
+    fi
+  '"
+
+  # Reload opendirectoryd (launchd respawns immediately)
+  kvasir::ssh_sudo "$host" "killall opendirectoryd 2>/dev/null || true"
+  sleep 2
+  kvasir::log info "  LDAPv3 bind to ${KVASIR_FREEIPA_FQDN} active"
+}
