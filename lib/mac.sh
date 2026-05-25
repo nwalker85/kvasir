@@ -130,3 +130,17 @@ mac::_render_ldap_plist() {
 </plist>
 EOF
 }
+
+# Render the sudoers fragment that grants nwalker passwordless root.
+# Args: <user> <short-hostname>
+mac::_render_sudoers_fragment() {
+  local user="$1" short="$2"
+  local stamp
+  stamp="$(date -u +%FT%TZ)"
+  cat <<EOF
+# Managed by kvasir — DO NOT EDIT.
+# Re-run \`kvasir enroll-host ${short} --apply\` to sync with IPA sudo rule
+# kvasir-root-${short}. Last generated: ${stamp}.
+${user} ALL=(root) NOPASSWD: ALL
+EOF
+}

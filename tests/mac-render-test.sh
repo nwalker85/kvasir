@@ -77,6 +77,44 @@ test::render_ldap_plist::has_tls_enabled() {
   printf 'PASS: render_ldap_plist::has_tls_enabled\n'
 }
 
+# ---- mac::_render_sudoers_fragment ----
+test::render_sudoers::passes_visudo() {
+  local output
+  output=$(mac::_render_sudoers_fragment "nwalker" "odin")
+  if ! command -v visudo >/dev/null 2>&1; then
+    printf 'SKIP: render_sudoers::passes_visudo (no visudo)\n'
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp)
+  printf '%s\n' "$output" > "$tmp"
+  if ! visudo -cf "$tmp" >/dev/null 2>&1; then
+    printf 'FAIL: visudo -cf rejected fragment\n%s\n' "$output" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+  rm -f "$tmp"
+  printf 'PASS: render_sudoers::passes_visudo\n'
+}
+
+test::render_sudoers::grants_nopasswd() {
+  local output
+  output=$(mac::_render_sudoers_fragment "nwalker" "odin")
+  grep -qE '^nwalker[[:space:]]+ALL=\(root\)[[:space:]]+NOPASSWD:[[:space:]]+ALL' <<<"$output" \
+    || { printf 'FAIL: nopasswd grant line missing\n%s\n' "$output" >&2; return 1; }
+  printf 'PASS: render_sudoers::grants_nopasswd\n'
+}
+
+test::render_sudoers::has_managed_header() {
+  local output
+  output=$(mac::_render_sudoers_fragment "nwalker" "odin")
+  grep -q 'Managed by kvasir' <<<"$output" \
+    || { printf 'FAIL: managed header missing\n' >&2; return 1; }
+  grep -q 'kvasir enroll-host odin' <<<"$output" \
+    || { printf 'FAIL: re-run hint missing\n' >&2; return 1; }
+  printf 'PASS: render_sudoers::has_managed_header\n'
+}
+
 test::render_krb5_conf::has_default_realm
 test::render_krb5_conf::has_realms_section
 test::render_krb5_conf::has_domain_realm_mapping
@@ -84,3 +122,6 @@ test::render_ldap_plist::is_valid_plist
 test::render_ldap_plist::has_server_host
 test::render_ldap_plist::has_rfc2307_mapping
 test::render_ldap_plist::has_tls_enabled
+test::render_sudoers::passes_visudo
+test::render_sudoers::grants_nopasswd
+test::render_sudoers::has_managed_header
