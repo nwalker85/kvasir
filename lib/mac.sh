@@ -264,3 +264,27 @@ mac::install_host_keytab() {
   (( found > 0 )) || kvasir::die "host principal not found in keytab after install"
   kvasir::log info "  /etc/krb5.keytab installed; host/${fqdn} principal present"
 }
+
+# Install FreeIPA CA cert at /etc/openldap/cacert.pem (referenced by the
+# LDAPv3 plist for TLS bind verification).
+# Args: <ssh-host>
+mac::stage_ca_cert() {
+  local host="$1"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would install FreeIPA CA cert at ${host}:/etc/openldap/cacert.pem"
+    return 0
+  fi
+
+  local ca_pem
+  ca_pem="$(ipa::ca_cert)" || kvasir::die "ipa::ca_cert failed"
+  [[ -n "$ca_pem" ]] || kvasir::die "ipa::ca_cert returned empty"
+
+  printf '%s' "$ca_pem" | kvasir::ssh_sudo "$host" "bash -c '
+    install -d -m 0755 /etc/openldap
+    cat > /tmp/kvasir.cacert
+    install -m 0644 -o root -g wheel /tmp/kvasir.cacert /etc/openldap/cacert.pem
+    rm -f /tmp/kvasir.cacert
+  '"
+  kvasir::log info "  /etc/openldap/cacert.pem installed"
+}
