@@ -49,3 +49,33 @@ if [[ "$OUTPUT" != "AAEACgADAAxLRVlUQUItQllURVMK" ]]; then
   exit 1
 fi
 printf 'PASS: ipa::host_keytab returns base64-wrapped keytab\n'
+
+# --- dry-run test ---
+MARKER="/tmp/kvasir-test-ssh-keytab-called"
+rm -f "$MARKER"
+
+cat >"${STUB_DIR}/ssh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "$*" == *"ipa-getkeytab"*"host/odin.ravenhelm.dev"* ]]; then
+  touch /tmp/kvasir-test-ssh-keytab-called
+  printf 'AAEACgADAAxLRVlUQUItQllURVMK'
+  exit 0
+fi
+printf 'unexpected ssh args: %s\n' "$*" >&2
+exit 64
+STUB
+chmod +x "${STUB_DIR}/ssh"
+
+KVASIR_DRY_RUN=1
+OUTPUT_DRY="$(ipa::host_keytab "odin.ravenhelm.dev" 2>/dev/null)"
+if [[ -n "$OUTPUT_DRY" ]]; then
+  printf 'FAIL: dry-run should return empty, got: %s\n' "$OUTPUT_DRY" >&2
+  exit 1
+fi
+if [[ -e "$MARKER" ]]; then
+  printf 'FAIL: dry-run should not invoke ssh\n' >&2
+  rm -f "$MARKER"
+  exit 1
+fi
+printf 'PASS: ipa::host_keytab dry-run returns empty without invoking ssh\n'
+rm -f "$MARKER"
