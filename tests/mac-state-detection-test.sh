@@ -16,8 +16,7 @@ case "$state" in
     exit 1
     ;;
   fully-enrolled)
-    if [[ "$*" == *"klist -k"* ]]; then
-      printf 'Keytab name: FILE:/etc/krb5.keytab\nKVNO Principal\n----\n   1 host/odin.ravenhelm.dev@RAVENHELM.DEV\n'
+    if [[ "$*" == *"test -f /etc/krb5.keytab"* ]]; then
       exit 0
     elif [[ "$*" == *"test -f /Library/Preferences/OpenDirectory"* ]]; then
       exit 0
@@ -27,8 +26,7 @@ case "$state" in
     exit 1
     ;;
   partial-keytab-only)
-    if [[ "$*" == *"klist -k"* ]]; then
-      printf '   1 host/odin.ravenhelm.dev@RAVENHELM.DEV\n'
+    if [[ "$*" == *"test -f /etc/krb5.keytab"* ]]; then
       exit 0
     fi
     exit 1

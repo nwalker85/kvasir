@@ -165,7 +165,10 @@ mac::_should_refresh() {
   local short="${fqdn%%.*}"
   local has_keytab=0 has_plist=0 has_sudoers=0
 
-  if ssh -o BatchMode=yes "$host" "klist -k /etc/krb5.keytab 2>/dev/null | grep -q 'host/${fqdn}'"; then
+  # /etc/krb5.keytab is 0600 root:wheel; non-root can't read it, so use file
+  # existence as a presence proxy. Per-principal validation happens in
+  # mac::install_host_keytab and mac::validate_identity (both with sudo).
+  if ssh -o BatchMode=yes "$host" "test -f /etc/krb5.keytab" 2>/dev/null; then
     has_keytab=1
   fi
   if ssh -o BatchMode=yes "$host" "test -f /Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist" 2>/dev/null; then
@@ -258,9 +261,10 @@ mac::install_host_keytab() {
     rm -f /tmp/kvasir.keytab
   '"
 
-  # Validate principal landed
+  # Validate principal landed. macOS uses Heimdal klist which doesn't accept
+  # the MIT `klist -k <path>` syntax — use ktutil --keytab=<path> list instead.
   local found
-  found="$(ssh "$host" "sudo klist -k /etc/krb5.keytab 2>/dev/null | grep -c 'host/${fqdn}'")"
+  found="$(ssh "$host" "sudo ktutil --keytab=/etc/krb5.keytab list 2>/dev/null | grep -c 'host/${fqdn}'")"
   (( found > 0 )) || kvasir::die "host principal not found in keytab after install"
   kvasir::log info "  /etc/krb5.keytab installed; host/${fqdn} principal present"
 }
@@ -353,7 +357,8 @@ mac::validate_identity() {
   fi
   kvasir::log info "  ✓ ${dscl_out}"
 
-  klist_out="$(ssh "$host" "sudo klist -k /etc/krb5.keytab 2>&1 | grep 'host/${fqdn}'")"
+  # macOS Heimdal klist doesn't accept MIT-style `klist -k <path>` — use ktutil.
+  klist_out="$(ssh "$host" "sudo ktutil --keytab=/etc/krb5.keytab list 2>&1 | grep 'host/${fqdn}'")"
   if [[ -z "$klist_out" ]]; then
     kvasir::die "host/${fqdn} not in /etc/krb5.keytab"
   fi
