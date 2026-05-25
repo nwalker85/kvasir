@@ -425,11 +425,13 @@ mac::enroll() {
       ;;
   esac
 
-  kvasir::log info "[mac 2/10] minting host record + OTP..."
+  # macOS doesn't run ipa-client-install (no freeipa-client package). We use
+  # host_register in "direct" mode: no OTP, krb principal created at host-add
+  # time, ipa-getkeytab can retrieve as admin immediately.
+  kvasir::log info "[mac 2/10] minting host record (direct mode, no OTP)..."
   ipa::admin_kinit_in_container
-  local otp
-  otp="$(ipa::host_register "$fqdn")"
-  kvasir::log info "  host record OK (OTP minted, host key will be (re)issued in step 3)"
+  ipa::host_register "$fqdn" direct >/dev/null
+  kvasir::log info "  host record OK (krb principal created; key retrieved in step 3)"
 
   kvasir::log info "[mac 3/10] minting + installing host keytab..."
   mac::install_host_keytab "$host" "$fqdn"
@@ -455,7 +457,6 @@ mac::enroll() {
   kvasir::log info "[mac 10/10] saving to 1Password..."
   op::create_item "FreeIPA Host ${short}" "${KVASIR_OP_VAULT}" \
     "username=host/${fqdn}" \
-    "concealed:enrollment-otp=${otp}" \
     "url=https://${KVASIR_FREEIPA_FQDN}" \
     "fqdn=${fqdn}" \
     "lan-ip=${lan_ip}" \
