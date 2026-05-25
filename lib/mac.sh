@@ -359,3 +359,38 @@ mac::validate_identity() {
   fi
   kvasir::log info "  ✓ host principal present in keytab"
 }
+
+# Render + install /etc/sudoers.d/kvasir-managed-<short> on target.
+# Prechecks that the IPA sudo rule exists. Validates with visudo before
+# installing. Backs up any prior non-kvasir fragment at the same path.
+# Args: <ssh-host> <short-hostname>
+mac::write_sudoers() {
+  local host="$1" short="$2"
+  local fragment_path="/etc/sudoers.d/kvasir-managed-${short}"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would precheck IPA sudo rule kvasir-root-${short}, render + install ${fragment_path}"
+    return 0
+  fi
+
+  mac::_verify_ipa_sudo_rule_exists "$short" \
+    || kvasir::die "IPA sudo rule kvasir-root-${short} not found — run service-account bootstrap first"
+
+  local content
+  content="$(mac::_render_sudoers_fragment "nwalker" "$short")"
+
+  kvasir::ssh_sudo "$host" "bash -c '
+    cat > /tmp/kvasir.sudoers <<\"EOF\"
+${content}
+EOF
+    chmod 0440 /tmp/kvasir.sudoers
+    visudo -cf /tmp/kvasir.sudoers >/dev/null \
+      || { echo \"visudo rejected fragment\" >&2; rm -f /tmp/kvasir.sudoers; exit 1; }
+    if [[ -f \"${fragment_path}\" ]] && ! grep -q \"Managed by kvasir\" \"${fragment_path}\"; then
+      cp \"${fragment_path}\" \"${fragment_path}.kvasir-bak.\$(date +%s)\"
+    fi
+    install -m 0440 -o root -g wheel /tmp/kvasir.sudoers \"${fragment_path}\"
+    rm -f /tmp/kvasir.sudoers
+  '"
+  kvasir::log info "  ${fragment_path} installed"
+}
