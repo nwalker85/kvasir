@@ -12,7 +12,7 @@ workflow; minimal end-user input.
 
 | Command                             | Effect                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kvasir enroll-host <target>`       | Joins a Linux host to the `RAVENHELM.DEV` FreeIPA realm. Drives the recipe in `[memory/freeipa-fleet-enrollment-recipe.md](../../../.claude/projects/-Users-nate-docs-personal-audio/memory/freeipa-fleet-enrollment-recipe.md)`: pre-creates the host record with an OTP, copies the CA cert, runs `ipa-client-install`, patches `default.conf`, enables sssd + mkhomedir, validates, ensures the host-scoped root service account + sudo rule, and stores the OTP in 1Password. |
+| `kvasir enroll-host <target>`       | Joins a Linux **or macOS** host to the `RAVENHELM.DEV` FreeIPA realm. **Linux:** OTP-based `ipa-client-install`, sssd + mkhomedir, sudo via IPA HBAC at runtime. **macOS:** Apple Directory Services LDAPv3 bind (anonymous read), Heimdal Kerberos with host keytab from `ipa-getkeytab`, kvasir-managed `/etc/sudoers.d/` fragment rendered from `kvasir-root-<short>` IPA sudo rule. Existing local Mac users (ravenhelm/nate) untouched as break-glass. See [`docs/mac-enrollment-design.md`](docs/mac-enrollment-design.md). |
 | `kvasir service-account <target>`   | Ensures the host-scoped root service account exists in FreeIPA and creates the initial credential bundle + 1Password item if needed. |
 | `kvasir install-service-account-key <target>` | Installs the service-account public key into host-local `~svc-<host>-root/.ssh/authorized_keys`. Use `--bootstrap-user` for first install when the service account cannot SSH yet. |
 | `kvasir verify-service-account <target>` | Verifies the 1Password item, target SSH reachability, FreeIPA/SSSD user resolution, SSSD SSH keys, host-local `authorized_keys`, service-account SSH login, and `sudo -n true` without prompting. Use `--ssh-host` and `--probe-user` when the identity host name and network route differ. |
@@ -80,6 +80,9 @@ ln -sf "$PWD/bin/kvasir" /usr/local/bin/kvasir
 
 # Apply for real
 kvasir enroll-host vakr --apply
+
+# Enroll a macOS host (auto-detected via uname=Darwin)
+kvasir enroll-host odin --apply
 
 # Refresh just the host-scoped root service account
 kvasir service-account vakr --apply
