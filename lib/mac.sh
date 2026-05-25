@@ -431,27 +431,28 @@ mac::enroll() {
   otp="$(ipa::host_register "$fqdn")"
   kvasir::log info "  host record OK (OTP minted, host key will be (re)issued in step 3)"
 
-  kvasir::log info "[mac 3-5/10] minting + installing host keytab..."
+  kvasir::log info "[mac 3/10] minting + installing host keytab..."
   mac::install_host_keytab "$host" "$fqdn"
 
   kvasir::log info "[mac 4/10] staging /etc/krb5.conf..."
   mac::stage_krb5_conf "$host"
 
-  kvasir::log info "[mac 6/10] staging FreeIPA CA cert..."
+  kvasir::log info "[mac 5/10] staging FreeIPA CA cert..."
   mac::stage_ca_cert "$host"
 
-  kvasir::log info "[mac 7/10] binding to LDAP..."
+  kvasir::log info "[mac 6/10] binding to LDAP..."
   mac::bind_ldap "$host"
 
-  kvasir::log info "[mac 8/10] ensuring root service account + sudo rule in IPA..."
+  kvasir::log info "[mac 7/10] ensuring root service account + sudo rule in IPA..."
   ipa::service_account_ensure_root "$short" "$fqdn" "$lan_ip"
 
-  kvasir::log info "[mac 9/10] writing local sudoers fragment..."
+  kvasir::log info "[mac 8/10] writing local sudoers fragment..."
   mac::write_sudoers "$host" "$short"
 
-  kvasir::log info "[mac 10/10] validating + saving to 1Password..."
+  kvasir::log info "[mac 9/10] validating identity..."
   mac::validate_identity "$host" "$fqdn"
 
+  kvasir::log info "[mac 10/10] saving to 1Password..."
   op::create_item "FreeIPA Host ${short}" "${KVASIR_OP_VAULT}" \
     "username=host/${fqdn}" \
     "concealed:enrollment-otp=${otp}" \
@@ -462,7 +463,7 @@ mac::enroll() {
     "kerberos=enabled" \
     "sudo-fragment-path=/etc/sudoers.d/kvasir-managed-${short}" \
     "enrolled-at=$(date -u +%FT%TZ)" \
-    "uninstall-cmd=ssh ${host} 'sudo rm /Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist; sudo dscl /Search -delete / CSPSearchPath /LDAPv3/${KVASIR_FREEIPA_FQDN}; sudo killall opendirectoryd; sudo rm /etc/sudoers.d/kvasir-managed-${short}'" \
+    "uninstall-cmd=ssh ${host} 'sudo rm /Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist; sudo dscl /Search -delete / CSPSearchPath /LDAPv3/${KVASIR_FREEIPA_FQDN}; sudo killall opendirectoryd; sudo rm /etc/sudoers.d/kvasir-managed-${short}; sudo rm -f /etc/krb5.keytab /etc/openldap/cacert.pem /etc/krb5.conf'" \
     "notesPlain=Enrolled by kvasir on $(date -u +%FT%TZ). Local users (ravenhelm/nate) untouched as break-glass. Re-run kvasir enroll-host ${short} --apply to rotate keytab + regenerate sudoers."
 
   kvasir::log info "DONE — ${fqdn} enrolled in ${KVASIR_FREEIPA_REALM} (macOS)"
