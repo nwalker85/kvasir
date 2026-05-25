@@ -34,6 +34,53 @@ test::render_krb5_conf::has_domain_realm_mapping() {
   printf 'PASS: render_krb5_conf::has_domain_realm_mapping\n'
 }
 
+# ---- mac::_render_ldap_plist ----
+test::render_ldap_plist::is_valid_plist() {
+  local output
+  output=$(mac::_render_ldap_plist "ipa.ravenhelm.dev" "ravenhelm.dev")
+  if ! command -v plutil >/dev/null 2>&1; then
+    printf 'SKIP: render_ldap_plist::is_valid_plist (no plutil)\n'
+    return 0
+  fi
+  if ! echo "$output" | plutil -lint -s - >/dev/null 2>&1; then
+    printf 'FAIL: plist did not pass plutil -lint\n%s\n' "$output" >&2
+    return 1
+  fi
+  printf 'PASS: render_ldap_plist::is_valid_plist\n'
+}
+
+test::render_ldap_plist::has_server_host() {
+  local output
+  output=$(mac::_render_ldap_plist "ipa.ravenhelm.dev" "ravenhelm.dev")
+  grep -q '<string>ipa.ravenhelm.dev</string>' <<<"$output" \
+    || { printf 'FAIL: server host missing\n' >&2; return 1; }
+  printf 'PASS: render_ldap_plist::has_server_host\n'
+}
+
+test::render_ldap_plist::has_rfc2307_mapping() {
+  local output
+  output=$(mac::_render_ldap_plist "ipa.ravenhelm.dev" "ravenhelm.dev")
+  grep -q '<string>uidNumber</string>' <<<"$output" \
+    || { printf 'FAIL: uidNumber mapping missing\n' >&2; return 1; }
+  grep -q '<string>gidNumber</string>' <<<"$output" \
+    || { printf 'FAIL: gidNumber mapping missing\n' >&2; return 1; }
+  grep -q '<string>homeDirectory</string>' <<<"$output" \
+    || { printf 'FAIL: homeDirectory mapping missing\n' >&2; return 1; }
+  printf 'PASS: render_ldap_plist::has_rfc2307_mapping\n'
+}
+
+test::render_ldap_plist::has_tls_enabled() {
+  local output
+  output=$(mac::_render_ldap_plist "ipa.ravenhelm.dev" "ravenhelm.dev")
+  grep -q '<key>SSLEnabledKey</key>' <<<"$output" \
+    || { printf 'FAIL: SSLEnabledKey missing\n' >&2; return 1; }
+  printf 'PASS: render_ldap_plist::has_tls_enabled\n'
+}
+
 test::render_krb5_conf::has_default_realm
 test::render_krb5_conf::has_realms_section
 test::render_krb5_conf::has_domain_realm_mapping
+test::render_ldap_plist::is_valid_plist
+test::render_ldap_plist::has_server_host
+test::render_ldap_plist::has_rfc2307_mapping
+test::render_ldap_plist::has_tls_enabled

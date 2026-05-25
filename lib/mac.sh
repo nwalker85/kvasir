@@ -38,3 +38,95 @@ mac::_render_krb5_conf() {
   ${domain} = ${realm}
 EOF
 }
+
+# Render the LDAPv3 OpenDirectory plist content. Args: <freeipa-fqdn> <domain>
+#
+# Maps FreeIPA's cn=accounts subtree to Apple's expected DS attributes
+# (RFC2307). Uses anonymous bind for read; if FreeIPA's ACI blocks anon
+# reads of required attrs on a hardened deployment, swap to a low-priv
+# bind DN (set BindDN/BindCredentials keys — left empty here).
+mac::_render_ldap_plist() {
+  local fqdn="$1" domain="$2"
+  local search_base="cn=accounts,dc=${domain//./,dc=}"
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>description</key>
+  <string>FreeIPA (${fqdn}) — managed by kvasir</string>
+  <key>options</key>
+  <dict>
+    <key>SSLEnabledKey</key>
+    <true/>
+    <key>Connection Setup Timeout</key>
+    <integer>15</integer>
+    <key>Connection Idle Timeout</key>
+    <integer>120</integer>
+  </dict>
+  <key>readonly</key>
+  <false/>
+  <key>template</key>
+  <string>RFC2307</string>
+  <key>hostname</key>
+  <string>${fqdn}</string>
+  <key>port</key>
+  <integer>636</integer>
+  <key>SSLEnabledKey</key>
+  <true/>
+  <key>BindDN</key>
+  <string></string>
+  <key>BindCredentials</key>
+  <string></string>
+  <key>recordTypes</key>
+  <dict>
+    <key>Users</key>
+    <dict>
+      <key>Search Base</key>
+      <string>${search_base}</string>
+      <key>Object Classes</key>
+      <array>
+        <string>posixAccount</string>
+        <string>inetOrgPerson</string>
+      </array>
+      <key>Native</key>
+      <dict>
+        <key>RecordName</key>
+        <string>uid</string>
+        <key>UniqueID</key>
+        <string>uidNumber</string>
+        <key>PrimaryGroupID</key>
+        <string>gidNumber</string>
+        <key>NFSHomeDirectory</key>
+        <string>homeDirectory</string>
+        <key>UserShell</key>
+        <string>loginShell</string>
+        <key>RealName</key>
+        <string>cn</string>
+        <key>EMailAddress</key>
+        <string>mail</string>
+      </dict>
+    </dict>
+    <key>Groups</key>
+    <dict>
+      <key>Search Base</key>
+      <string>${search_base}</string>
+      <key>Object Classes</key>
+      <array>
+        <string>posixGroup</string>
+      </array>
+      <key>Native</key>
+      <dict>
+        <key>RecordName</key>
+        <string>cn</string>
+        <key>PrimaryGroupID</key>
+        <string>gidNumber</string>
+        <key>GroupMembership</key>
+        <string>memberUid</string>
+      </dict>
+    </dict>
+  </dict>
+</dict>
+</plist>
+EOF
+}
