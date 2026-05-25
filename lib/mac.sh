@@ -154,3 +154,33 @@ mac::_verify_ipa_sudo_rule_exists() {
   local short="$1"
   ipa::cmd sudorule-show "kvasir-root-${short}" >/dev/null 2>&1
 }
+
+# Probe the target for pre-existing enrollment state. Returns:
+#   0 — fully enrolled (keytab principal + LDAPv3 plist + sudoers fragment all present) → refresh OK
+#   1 — clean (none of the artifacts present) → fresh install
+#   2 — partial (some but not all) → require --force-reenroll
+# Args: <ssh-host> <fqdn>
+mac::_should_refresh() {
+  local host="$1" fqdn="$2"
+  local short="${fqdn%%.*}"
+  local has_keytab=0 has_plist=0 has_sudoers=0
+
+  if ssh -o BatchMode=yes "$host" "klist -k /etc/krb5.keytab 2>/dev/null | grep -q 'host/${fqdn}'"; then
+    has_keytab=1
+  fi
+  if ssh -o BatchMode=yes "$host" "test -f /Library/Preferences/OpenDirectory/Configurations/LDAPv3/${KVASIR_FREEIPA_FQDN}.plist" 2>/dev/null; then
+    has_plist=1
+  fi
+  if ssh -o BatchMode=yes "$host" "test -f /etc/sudoers.d/kvasir-managed-${short}" 2>/dev/null; then
+    has_sudoers=1
+  fi
+
+  local total=$(( has_keytab + has_plist + has_sudoers ))
+  if (( total == 3 )); then
+    return 0
+  elif (( total == 0 )); then
+    return 1
+  else
+    return 2
+  fi
+}
