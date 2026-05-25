@@ -328,3 +328,34 @@ EOF
   sleep 2
   kvasir::log info "  LDAPv3 bind to ${KVASIR_FREEIPA_FQDN} active"
 }
+
+# Validate identity resolution on the target. Hard-fails if id nwalker or
+# dscl read are empty. Logs green checks on success.
+# Args: <ssh-host> <fqdn>
+mac::validate_identity() {
+  local host="$1" fqdn="$2"
+
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: would validate id nwalker / dscl / klist -k on ${host}"
+    return 0
+  fi
+
+  local id_out dscl_out klist_out
+  id_out="$(ssh "$host" "id nwalker 2>&1")"
+  if ! [[ "$id_out" =~ uid=[0-9]+\(nwalker\) ]]; then
+    kvasir::die "id nwalker failed on ${host}: ${id_out}"
+  fi
+  kvasir::log info "  ✓ ${id_out}"
+
+  dscl_out="$(ssh "$host" "dscl . -read /Users/nwalker UniqueID 2>&1")"
+  if ! [[ "$dscl_out" =~ UniqueID:[[:space:]]*[0-9]+ ]]; then
+    kvasir::die "dscl . -read /Users/nwalker UniqueID failed: ${dscl_out}"
+  fi
+  kvasir::log info "  ✓ ${dscl_out}"
+
+  klist_out="$(ssh "$host" "sudo klist -k /etc/krb5.keytab 2>&1 | grep 'host/${fqdn}'")"
+  if [[ -z "$klist_out" ]]; then
+    kvasir::die "host/${fqdn} not in /etc/krb5.keytab"
+  fi
+  kvasir::log info "  ✓ host principal present in keytab"
+}
