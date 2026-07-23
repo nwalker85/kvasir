@@ -224,6 +224,7 @@ fi
 if [[ "${KVASIR_CREATE_ROOT_SERVICE_ACCOUNT:-1}" == "1" ]]; then
   kvasir::log info "[8/9] ensuring root-capable service account..."
   ipa::service_account_ensure_root "${SHORT}" "${FQDN}" "${TARGET_IP}"
+  kvasir::run_ssh_sudo "${SSH_HOST}" "systemctl restart sssd"
 else
   kvasir::log info "[8/9] root service account bootstrap disabled via KVASIR_CREATE_ROOT_SERVICE_ACCOUNT=0"
 fi
@@ -243,3 +244,4 @@ op::create_item "FreeIPA Host ${SHORT}" "${KVASIR_OP_VAULT}" \
 kvasir::log info "DONE — ${FQDN} enrolled in ${KVASIR_FREEIPA_REALM}"
 kvasir::is_dry_run \
   && kvasir::log warn "this was a DRY-RUN; pass --apply to actually do it."
+exit 0
