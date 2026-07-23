@@ -39,6 +39,7 @@ STUB
 chmod +x "${STUB_DIR}/ssh"
 
 export PATH="${STUB_DIR}:${PATH}"
+export KVASIR_FREEIPA_FQDN="ipa.ravenhelm.dev"
 source "${ROOT}/lib/common.sh"
 source "${ROOT}/lib/mac.sh"
 

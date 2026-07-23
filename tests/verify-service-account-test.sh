@@ -71,11 +71,11 @@ while (( i < ${#args[@]} )); do
   arg="${args[$i]}"
   case "$arg" in
     -i)
-      (( i++ ))
+      i=$((i + 1))
       identity_file="${args[$i]}"
       ;;
     -o|-F|-J|-l|-p|-S|-b|-c|-D|-E|-e|-I|-L|-m|-O|-Q|-R|-W|-w)
-      (( i++ ))
+      i=$((i + 1))
       ;;
     -*)
       ;;
@@ -83,7 +83,7 @@ while (( i < ${#args[@]} )); do
       nonopts+=("$arg")
       ;;
   esac
-  (( i++ ))
+  i=$((i + 1))
 done
 
 if (( ${#nonopts[@]} == 0 )); then

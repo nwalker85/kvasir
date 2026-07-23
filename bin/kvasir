@@ -8,7 +8,19 @@
 #   kvasir add-ssh-key [--fido2 | --pubkey FILE]
 #   kvasir version
 set -euo pipefail
-KVASIR_BIN="$(cd "$(dirname "$0")" && pwd)"
+
+# Follow the installed symlink before locating sibling commands. Invoking a
+# symlink via ~/.local/bin or /usr/local/bin leaves $0 at the install path;
+# resolving BASH_SOURCE keeps the repository's bin/ and lib/ tree together.
+KVASIR_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "${KVASIR_SOURCE}" ]]; do
+  KVASIR_LINK_DIR="$(cd -P "$(dirname "${KVASIR_SOURCE}")" && pwd)"
+  KVASIR_SOURCE="$(readlink "${KVASIR_SOURCE}")"
+  if [[ "${KVASIR_SOURCE}" != /* ]]; then
+    KVASIR_SOURCE="${KVASIR_LINK_DIR}/${KVASIR_SOURCE}"
+  fi
+done
+KVASIR_BIN="$(cd -P "$(dirname "${KVASIR_SOURCE}")" && pwd)"
 
 case "${1:-}" in
   ""|-h|--help|help)
