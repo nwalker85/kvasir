@@ -232,3 +232,21 @@ console-action collab) + Frigg M2+ merge-queue design.
 | P6 | Land RAV-1164 before Frigg M0 read panes | Frigg ships pre-deprecated mapping code |
 | P7 | DID-issuer mini-ADR now (dómr schema needs the anchor) | Q4 gets decided by accident |
 | P8 | R7 enforced: kvasir mints, Forseti evaluates, observers propose | Unwitnessed principals return at the edge |
+
+---
+
+## Disposition (recorded 2026-08-03, from the amended master doc)
+
+The master was amended the same evening, adjudicating this series alongside
+the ioslogs auditor's M1–M8 and the architecture-repo proposal (R14/R15):
+
+| # | Disposition | Where it landed |
+| --- | --- | --- |
+| P1 | **ADOPTED** | Sequencing §9.4 — Project A TLS gate "now owned by the Internal Trust Fabric stream (P1)" |
+| P2 | **ADOPTED as D10** (numbering arbitration: D9 went to acquisition durability, M5) | Invariant D10, verbatim incl. emergency class + `witness_deferred` |
+| P3 | **ADOPTED, extended** | Folded into amended D2 — and generalized beyond this proposal: Vidar CMDB + Mímir catalog are also projections (R14) |
+| P4 | **ADOPTED** | Folded into amended D8 — ordinal scale + evidence-ref shape, designed in the Frigg receipt schema |
+| P5 | **ADOPTED as hard gate** | Sequencing §9.4 — no M1 writable enrollment before break-glass. (FreeIPA-replica half not explicitly chartered — still open) |
+| P6 | **ADOPTED as hard gate** (independently reached by the M-series) | Sequencing §9.4 — RAV-1164 before the M0 read-pane milestone |
+| P7 | **Not visibly adopted** — M4 remains gated on open Q4; no early DID-issuer mini-ADR appears in the register or sequencing | Flag to Nate: intentional rejection or omission? |
+| P8 | **Substantially covered** by R6 (observers propose via merge queue, decisions receipted through kvasir-api) + R7 resolution (provisioning via kvasir M2 mints) | The Cedar-expression of the threshold rule is the only sliver not recorded |

@@ -203,8 +203,17 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   **Forseti `permissions/check`** (R12), receipt store (Postgres,
   **producer-local operational store only** — canonical evidence custody is
   AAS per ADR-005; migrations from day one, real-datastore CI + no
-  exception-swallowing per R10), receipt anchoring to the witness ledger,
-  per-org scoping middleware.
+  exception-swallowing per R10, **fixtures derived from captured real
+  responses — never hand-written (R10c) — and OS-boundary tests run on the
+  deployment platform (R10d)**), receipt anchoring to the witness ledger,
+  per-org scoping middleware. **Verification per amended D7:** a positive
+  query against the destination store confirming the expected effect — exit
+  codes, receipts, job statuses, and absence-of-error are not verification.
+  **Witness-unavailability per D10:** mutations refuse when the witness is
+  unreachable, except the enumerated emergency class (revocation, lock,
+  session-kill) which executes and queues `witness_deferred` receipts with a
+  monotonic local sequence — buffer/sequence fields belong in the receipt
+  schema from day one.
 - Cedar **console-action policy subset** (org-scoping + admin-role), evaluated
   by Forseti. ⚠️ The full 14-policy Cedar corpus remains a **design collab
   with Nate, not a subagent job**.
@@ -215,8 +224,11 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   host principal) is the registry of record; inferred (Heimdall) ALWAYS
   renders with evidence + confidence, never as settled fact; attested
   (ioslogs) linked by assertion only. Heimdall `owner_user_id` is **not**
-  `rig_user_id` (R1, World B) — M0 read panes resolve people via the
-  documented Zitadel mapping chain until RAV-1164 lands.
+  `rig_user_id` (R1, World B) — per the amended master (sequencing §9.4,
+  P6/M-consensus **hard gate**): **RAV-1164 completes before the M0 read-pane
+  milestone**; Frigg ships no mapping-chain translation code. Until R13
+  resolves (Nate's two live Rig principals merged, witnessed), nothing
+  resolves principals through Rig `user_auth`.
 - **Heimdall merge-queue read pane (R6):** Frigg owns the merge queue's
   consumer seat — M0 renders the queue (41 open) read-only; accept/reject
   workflow deferred to M2+.
@@ -238,8 +250,14 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   UDID/serial/MAC at fact-time — Fleet stops being a fourth unjoined device
   axis. Device→person assignment is written through Forseti as a provisioning
   fact (D2), never inferred.
+- **Gate (P5, master §9.4):** no writable enrollment before the break-glass
+  path exists — kvasir-api provisions the systems it authenticates against,
+  and the designed emergency access path (OpenBao escrow + host-local access,
+  every use minting a `witness_deferred` receipt + automatic Týr review) must
+  land first.
 - **Gate:** a macOS + a Linux endpoint enrolled end-to-end from the Console,
-  matching the postmortem's corrected sequence; receipts queryable.
+  matching the postmortem's corrected sequence; receipts queryable per
+  amended D7 (positive query, not receipt existence).
 
 ### M2 — Human lifecycle (writable)
 - Create/disable/lock humans (FreeIPA, org subtrees), group membership,
@@ -248,6 +266,10 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   kvasir-api brokering FreeIPA password reset with one-time OpenBao handoff) —
   needs its own mini-ADR before build.
 - Vendor-org onboarding flow per the redline (external org + `serves` edges).
+- **Gate (R13):** before any M2 human flow, Nate's two live Rig principals
+  (`nwalker` / `nwalker85@gmail.com`) are merged/retired — witnessed,
+  evidence-linked — and family Zitadel bindings backfill at first
+  Rig-mediated login; no `user_auth`-based principal resolution before that.
 - **Gate:** onboard a new human into a tenant entirely from the Console;
   8/8 SoD Cedar checks still pass; orphan-session rejection still holds.
 
@@ -292,7 +314,7 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
 | 5 | Fleet **Free-tier API** coverage for posture/MDM delivery needs verification (premium gating exists server-side too, cf. `--disable-setup-experience`) | M0 adapter spike |
 | 6 | FreeIPA deployment state (primary/replica per Apr arch notes) must be verified live before M0 — verify-before-build | M0 precondition |
 | 7 | Multi-tenant from day one enlarges every milestone; if timeline slips, fallback is admin-only M0 with tenancy scaffolded but Cedar policies deferred | Nate's call if it bites |
-| 8 | Internal routing/TLS (Project A) before Console↔authority traffic — now a **formal hard gate** in the master architecture | Project A remediation |
+| 8 | Internal routing/TLS (Project A) before Console↔authority traffic — formal hard gate, now **owned by the Internal Trust Fabric stream** (P1 adopted, master §9.4) | Internal Trust Fabric |
 | 9 | Heimdall `owner_user_id` ≠ `rig_user_id` (R1, World B) — Frigg reads via the mapping chain; spine remediation is RAV-1164/1192, owned by the Identity Spine Remediation project, NOT Frigg | Identity Spine Remediation |
 | 10 | Merge-queue decisions (accept/reject cross-plane assertions) are governance actions — deferred to M2+ with their own Cedar policies; M0 is read-only (R6) | M2 charter |
 | 11 | `kvasir_*` Bifrost tools (agent-facing surface) must carry confidence per D8 — design with the receipt schema, build post-M1 | receipt-schema ticket |
