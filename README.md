@@ -7,6 +7,15 @@
 Identity-onboarding automation for the Ravenhelm platform. One command per
 workflow; minimal end-user input.
 
+## Product direction
+
+Kvasir is growing from host and user onboarding scripts into Ravenhelm's
+enrollment-and-trust control plane. The intended destination and the deliberately
+limited first product increment are documented together:
+
+- [Product vision: Enrollment and Trust Control Plane](docs/kvasir-product-vision.md)
+- [MVP PRD: verified endpoint enrollment](docs/kvasir-endpoint-enrollment-mvp-prd.md)
+
 ## What it does
 
 

@@ -79,21 +79,36 @@ ipa::cmd() {
   ipa::docker_exec "ipa ${escaped[*]}"
 }
 
-# host-add (always fresh) with a hex OTP. Echoes the OTP on stdout.
-# Args: <fqdn>
+# host-add (always fresh). Echoes the OTP on stdout when mode=otp.
+# Args: <fqdn> [mode]
+#   mode = otp     (default) — host-add with --password=<otp>. The host
+#                  record is created WITHOUT a Kerberos principal; the
+#                  principal is created when the OTP is later consumed by
+#                  ipa-client-install (or LDAP simple bind as the host
+#                  DN with the OTP). Returns the OTP on stdout. Use this
+#                  for Linux targets that run ipa-client-install.
+#   mode = direct  host-add with NO password. The Kerberos principal is
+#                  created at host-add time. Caller can immediately call
+#                  ipa-getkeytab as admin to retrieve the keytab. Returns
+#                  empty string. Use this for macOS / Apple Silicon
+#                  targets that can't run ipa-client-install.
 #
 # If a host record already exists with a keytab attached, `ipa host-mod
 # --password=<otp>` fails with "Password cannot be set on enrolled host".
 # Cleanest path: delete the existing host record (invalidates the
-# server-side keytab), then re-add with the new OTP. The client side must
-# then run `ipa-client-install --uninstall && --install` to get a fresh
-# keytab — enroll-host handles that.
+# server-side keytab), then re-add. The client side then re-enrolls.
 ipa::host_register() {
-  local fqdn="$1"
-  local otp
-  otp="$(openssl rand -hex 16)"
+  local fqdn="$1" mode="${2:-otp}"
+  local otp=""
+  if [[ "$mode" == "otp" ]]; then
+    otp="$(openssl rand -hex 16)"
+  fi
   if kvasir::is_dry_run; then
-    kvasir::log info "DRY: ipa host-add ${fqdn} --password=<otp> --force (or host-del+host-add if exists)"
+    if [[ "$mode" == "otp" ]]; then
+      kvasir::log info "DRY: ipa host-add ${fqdn} --password=<otp> --force (or host-del+host-add if exists)"
+    else
+      kvasir::log info "DRY: ipa host-add ${fqdn} --force (direct mode — krb principal created at add time)"
+    fi
     echo "$otp"
     return 0
   fi
@@ -101,8 +116,12 @@ ipa::host_register() {
     ipa::cmd host-del "$fqdn" >/dev/null
     kvasir::log info "freeipa host-del ${fqdn} (was already enrolled — keytab invalidated)"
   fi
-  ipa::cmd host-add "$fqdn" --password="$otp" --force >/dev/null
-  kvasir::log info "freeipa host-add ${fqdn}"
+  if [[ "$mode" == "otp" ]]; then
+    ipa::cmd host-add "$fqdn" --password="$otp" --force >/dev/null
+  else
+    ipa::cmd host-add "$fqdn" --force >/dev/null
+  fi
+  kvasir::log info "freeipa host-add ${fqdn} (mode=${mode})"
   echo "$otp"
 }
 
