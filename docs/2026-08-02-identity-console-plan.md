@@ -6,17 +6,20 @@
 | Owner | Nate Walker |
 | Created | 2026-08-02 |
 | Decision inputs | Q&A this session: full provisioning console · audience = Nate + tenant/vendor admins · Kvasir grows an API, UI + CLI are clients · all four domains in scope, phased |
-| Governing ADR | Org-Wide Identity Provisioning & RBAC Schema (APPROVED 2026-07-17 — invariants bind) |
+| Governing canon | **Ravenhelm Identity Fabric — Master Architecture** (ACCEPTED 2026-08-02; Outline `AD5C9FXJBI`, source `~/docs/100-forensics/identity-architecture-master.md` — invariants D1–D8, register R1–R13) · Org-Wide Identity Provisioning & RBAC Schema (APPROVED 2026-07-17) · runestack ADR-005 (accountability boundaries) · runestack ADR-008 (Týr judgment, ACCEPTED 2026-08-02). Where this plan disagrees with those, they win. |
+| Linear | Initiative "Identity, Governance, and Agent Accountability" → project **"Frigg — Identity Console (M0–M1)"** (start 2026-08-10, target 2026-10-16) |
 | Companion docs | `kvasir-product-vision.md` · `kvasir-endpoint-enrollment-mvp-prd.md` · runestack ADR-002 · (pending) runestack ADR-007 mTLS/PKI |
+| Reconciled | 2026-08-02 against the workshop canon — R5/R6/R8/R10/R11/R12, D1–D8, hard gates; Flow A authz seat corrected to Forseti |
 | Supersedes | The never-built "modify FleetDM's UI" idea — Fleet becomes a backend you stop opening |
 
 ## 1. What this is
 
 A web console delivering the JumpCloud-parity feature set over the Ravenhelm
 identity plane: FreeIPA (human SoT), Zitadel (OIDC broker), Forseti→OpenFGA
-(relationships), Cedar via Rig (policy), FleetDM (device posture/MDM), OpenBao
-(secrets), Tyr (audit), and — once ADR-007 lands — the step-ca/SPIRE PKI layer
-for host/user/SSH/workload credentials.
+(relationships + Cedar policy decisions, per R12), FleetDM (device
+posture/MDM), OpenBao (secrets), the witness ledger (Vór-signed receipts in
+AAS custody — ADR-005/ADR-008; Týr judges it ex-post), and — once ADR-007
+lands — the step-ca/SPIRE PKI layer for host/user/SSH/workload credentials.
 
 **Kvasir stays true to its vision.** The vision doc says Kvasir is "not a
 universal admin console" — and it remains not one. Kvasir's orchestration core
@@ -25,8 +28,8 @@ console is a *client* of it, exactly as the CLI is. "Coordinates, never
 absorbs" becomes an API contract. Every provisioning action — regardless of
 surface — flows through kvasir-api and produces one receipt stream.
 
-**Naming:** the console needs its own codename (Nate's call, per
-repo-lifecycle). Referred to as "Console" throughout.
+**Naming:** the console is **Frigg** (named by Nate 2026-08-02,
+collision-checked). Referred to as "Console" throughout.
 
 ## 2. Binding constraints (from the approved ADR — not renegotiated here)
 
@@ -59,11 +62,11 @@ C4Context
     System_Ext(freeipa, "FreeIPA", "Human identity SoT, Kerberos/LDAP, host principals")
     System_Ext(zitadel, "Zitadel", "OIDC session broker (LDAP-backed)")
     System_Ext(forseti, "Forseti", "FreeIPA→OpenFGA sync; SOLE tuple writer")
-    System_Ext(rig, "Rig", "Canonical principal (rig_user_id); Cedar PDP host")
+    System_Ext(rig, "Rig", "Canonical principal (rig_user_id); context injection")
     System_Ext(fleet, "FleetDM", "Device inventory / posture / MDM (read-only + delivery channel)")
     System_Ext(pki, "PKI layer (ADR-007)", "step-ca / SPIRE / Dogtag — cert + SSH issuance")
     System_Ext(openbao, "OpenBao", "Secrets & leases")
-    System_Ext(tyr, "Tyr", "Hash-chained audit ledger")
+    System_Ext(tyr, "AAS", "Witness ledger - Vor-signed evidence custody; Tyr judges ex-post")
     Rel(nate, console, "administers estate")
     Rel(tenantAdmin, console, "administers own org (Cedar-scoped)")
     Rel(nate, kvasirCli, "same operations, terminal-first")
@@ -71,8 +74,8 @@ C4Context
     Rel(kvasirCli, kvasirApi, "same API, device-code auth")
     Rel(kvasirApi, freeipa, "human/host lifecycle")
     Rel(kvasirApi, zitadel, "session visibility / revoke")
-    Rel(kvasirApi, forseti, "relationship change requests")
-    Rel(kvasirApi, rig, "principal resolution + Cedar authz")
+    Rel(kvasirApi, forseti, "relationship change requests + Cedar authz decisions")
+    Rel(kvasirApi, rig, "principal resolution")
     Rel(kvasirApi, fleet, "posture reads, MDM delivery")
     Rel(kvasirApi, pki, "issuance / rotation requests")
     Rel(kvasirApi, openbao, "one-time credential handoff")
@@ -85,11 +88,11 @@ C4Context
 C4Container
     title Identity Console + kvasir-api — Containers
     Person(admin, "Admin (Nate / tenant admin)")
-    Container_Boundary(consoleB, "Identity Console (new repo/codename)") {
+    Container_Boundary(consoleB, "Frigg — Identity Console") {
         Container(web, "Console web app", "Next.js + Ravenhelm design system (code-canonical)", "SSR UI; no business logic; talks only to kvasir-api")
     }
     Container_Boundary(kvasirB, "kvasir (existing repo)") {
-        Container(api, "kvasir-api", "FastAPI", "AuthN (Zitadel OIDC) → principal (rig_user_id) → authz (Cedar via Rig) → orchestrate → receipt")
+        Container(api, "kvasir-api", "FastAPI", "AuthN (Zitadel OIDC) → principal (rig_user_id via Rig) → authz (Cedar via Forseti) → orchestrate → receipt")
         Container(cli, "kvasir CLI", "shell/python", "Peer client; existing enroll flows re-pointed at kvasir-api")
         Container(recdb, "Receipt store", "Postgres", "Non-secret receipts: who/what/when/preconditions/evidence refs")
         Container(adapters, "Authority adapters", "python modules", "freeipa / zitadel / forseti / fleet / pki / openbao — one module per authority, no cross-calls")
@@ -101,7 +104,7 @@ C4Container
     System_Ext(flt, "FleetDM")
     System_Ext(pkiS, "PKI (ADR-007)")
     System_Ext(bao, "OpenBao")
-    System_Ext(tyrS, "Tyr")
+    System_Ext(tyrS, "AAS (witness)")
     Rel(admin, web, "HTTPS (Zitadel OIDC login)")
     Rel(web, api, "REST, user token exchange")
     Rel(cli, api, "REST, device-code flow")
@@ -110,7 +113,8 @@ C4Container
     Rel(adapters, ipa, "LDAP/API")
     Rel(adapters, zit, "mgmt API")
     Rel(adapters, fors, "sync/JIT API")
-    Rel(api, rigS, "resolve rig_user_id; Cedar decision per action")
+    Rel(api, rigS, "resolve rig_user_id")
+    Rel(api, fors, "Cedar authz decision per action")
     Rel(adapters, flt, "REST (read + MDM delivery)")
     Rel(adapters, pkiS, "issuance API")
     Rel(adapters, bao, "lease/one-time handoff")
@@ -129,16 +133,17 @@ C4Dynamic
     Person(ta, "Tenant admin")
     Container(webD, "Console web app")
     Container(apiD, "kvasir-api")
-    System_Ext(rigD, "Rig (Cedar)")
+    System_Ext(rigD, "Rig")
     System_Ext(ipaD, "FreeIPA")
-    System_Ext(forsD, "Forseti")
-    System_Ext(tyrD, "Tyr")
+    System_Ext(forsD, "Forseti (PDP)")
+    System_Ext(tyrD, "AAS (witness)")
     Rel(ta, webD, "1. New user form (org-scoped)")
     Rel(webD, apiD, "2. POST /humans (OIDC token)")
-    Rel(apiD, rigD, "3. resolve rig_user_id; Cedar: may THIS admin create in THIS org?")
-    Rel(apiD, ipaD, "4. create user in org subtree (sole human SoT)")
-    Rel(apiD, forsD, "5. request persona/tuple sync (sole tuple writer)")
-    Rel(apiD, tyrD, "6. receipt: actor, subject, evidence, decision — hash-anchored")
+    Rel(apiD, rigD, "3. resolve rig_user_id + context injection (R12: no PDP in Rig)")
+    Rel(apiD, forsD, "4. permissions/check → allowed + authority_chain + entry_hash")
+    Rel(apiD, ipaD, "5. create user in org subtree (sole human SoT)")
+    Rel(apiD, forsD, "6. request persona/tuple sync (sole tuple writer)")
+    Rel(apiD, tyrD, "7. receipt w/ decision entry_hash → witness ledger")
 ```
 
 ```mermaid
@@ -150,13 +155,15 @@ C4Dynamic
     System_Ext(fltE, "FleetDM")
     System_Ext(ipaE, "FreeIPA")
     System_Ext(pkiE, "PKI")
-    System_Ext(tyrE, "Tyr")
+    System_Ext(forsE, "Forseti")
+    System_Ext(tyrE, "AAS (witness)")
     Rel(op, webE, "1. Enroll endpoint wizard")
     Rel(webE, apiE, "2. POST /endpoints/enroll")
     Rel(apiE, fltE, "3. verify custody/posture (read-only precondition)")
     Rel(apiE, ipaE, "4. verify/create host principal")
     Rel(apiE, pkiE, "5. request host cert (ADR-007 path)")
-    Rel(apiE, tyrE, "6. non-secret enrollment receipt anchored")
+    Rel(apiE, forsE, "6. device→person assignment as provisioning fact (D2)")
+    Rel(apiE, tyrE, "7. receipt stamps UDID/serial/MAC at fact-time (R5/D5)")
 ```
 
 Failure handling in both flows: kvasir-api is the only component allowed to
@@ -165,25 +172,54 @@ a failed sequence leaves a resumable receipt, never a silent half-state.
 Adapters are idempotent (create-if-absent, verify-then-mutate) so retries are
 safe.
 
+**Authz seat (R12, decided 2026-08-02):** Cedar decisions are rendered by
+**Forseti** (`permissions/check` → `allowed + authority_chain + entry_hash`);
+Rig resolves principals and injects the ADR §10 context. It does not host a
+PDP — read the flows' authorization steps accordingly. See the master identity
+architecture doc, register R12.
+
+**Witness seat (R11 — closed 2026-08-02, ADR-008 merged):** receipts anchor to
+the **witness ledger** — Vór-signed, AAS-custodied (ADR-005) — never to Týr,
+which is the judge that reads them (ADR-008). "Tyr" nodes in the diagrams
+above are relabeled AAS accordingly; kvasir-api's receipt stream is ingested
+by AAS and enters the accountable action loop like any other deed.
+
 ## 6. Phased implementation
 
-Everything below v1-scoped per this session's decisions; each milestone ships
-usable value and is a Forgejo PR series with its own acceptance gate. Read
+**Charter status (2026-08-02 workshop):** only **M0–M1 are chartered** — Linear
+project "Frigg — Identity Console (M0–M1)", start 2026-08-10, milestones: repo
+& scaffold gates 08-21 · M0 spine + read panes 09-18 · M0 gate (tenant-scoped
+login) 09-25 · M1 enrollment writable 10-16. **M2–M4 are design intent only**
+and get chartered after the M0/M1 gates pass (M4 overlaps the "Vor — Agent
+Identity & Contract Authority" project; charter boundary to be drawn then).
+Each milestone is a Forgejo PR series with its own acceptance gate. Read
 surfaces for **all** domains land in M0 — writability arrives per-milestone.
 
 ### M0 — Spine + read-only pane of glass
-- `kvasir-api` skeleton: FastAPI, Zitadel OIDC (client-credentials for CLI
-  device flow), principal resolution via Rig (`rig_user_id`), receipt store
-  (Postgres, `create_all` gotcha noted — use migrations from day one), Tyr
-  anchoring, per-org scoping middleware.
-- Cedar authz for **console actions** — this activates Cedar for a real,
-  bounded policy set. ⚠️ The 14-policy Cedar design is flagged in the ADR
-  notes as a **design collab with Nate, not a subagent job**; M0 needs only
-  the console-action subset (org-scoping + admin-role policies), drafted in
-  that collab.
+- **First ticket is the receipt schema** — field-level, AAS-targeted (per the
+  Linear project doctrine; plan-level prose is not a schema).
+- `kvasir-api` skeleton: FastAPI, Zitadel OIDC (device flow for the CLI),
+  principal resolution + context injection via Rig (`rig_user_id`), authz via
+  **Forseti `permissions/check`** (R12), receipt store (Postgres,
+  **producer-local operational store only** — canonical evidence custody is
+  AAS per ADR-005; migrations from day one, real-datastore CI + no
+  exception-swallowing per R10), receipt anchoring to the witness ledger,
+  per-org scoping middleware.
+- Cedar **console-action policy subset** (org-scoping + admin-role), evaluated
+  by Forseti. ⚠️ The full 14-policy Cedar corpus remains a **design collab
+  with Nate, not a subagent job**.
 - Authority adapters, read paths only: FreeIPA (users/groups/hosts), Zitadel
   (sessions), Forseti/OpenFGA (relationship views), Fleet (device posture),
-  OpenBao (lease metadata only).
+  OpenBao (lease metadata only), Heimdall (inferred clusters — read-only).
+- **Three device planes rendered as such (D2/D3/D8):** enrolled (Fleet+IPA
+  host principal) is the registry of record; inferred (Heimdall) ALWAYS
+  renders with evidence + confidence, never as settled fact; attested
+  (ioslogs) linked by assertion only. Heimdall `owner_user_id` is **not**
+  `rig_user_id` (R1, World B) — M0 read panes resolve people via the
+  documented Zitadel mapping chain until RAV-1164 lands.
+- **Heimdall merge-queue read pane (R6):** Frigg owns the merge queue's
+  consumer seat — M0 renders the queue (41 open) read-only; accept/reject
+  workflow deferred to M2+.
 - Console web app shell: Next.js + Ravenhelm design system; directory views —
   People, Devices, Services/Agents, Orgs, Credentials (empty until M3) — each
   entity page aggregating all authorities' views of that entity + its receipt
@@ -198,6 +234,10 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   receipts.
 - Enrollment wizard + receipt timeline in the Console; re-enrollment and
   decommission flows (decommission = loud, receipt-anchored).
+- **Hardware-handle stamping (R5/D5):** enrollment receipts stamp
+  UDID/serial/MAC at fact-time — Fleet stops being a fourth unjoined device
+  axis. Device→person assignment is written through Forseti as a provisioning
+  fact (D2), never inferred.
 - **Gate:** a macOS + a Linux endpoint enrolled end-to-end from the Console,
   matching the postmortem's corrected sequence; receipts queryable.
 
@@ -224,7 +264,8 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   before build); Varar contract visibility: which agent holds which scoped,
   TTL'd authority right now, with revoke.
 - **Gate:** provision an agent identity end-to-end and revoke its Varar
-  contract from the Console, with the revocation visible in Tyr.
+  contract from the Console, with the revocation visible in the witness
+  ledger (AAS) — and judgeable by Týr ex-post (ADR-008).
 
 ## 7. Repo & delivery mechanics
 
@@ -232,8 +273,8 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
   receipts contract. Currently GitHub-primary; run it through
   ravenhelm-repo-lifecycle (Forgejo migration + runner onboarding) **before**
   M0 merges, so CI/review land on Forgejo/Snotra from the start.
-- **Console** gets its own repo + codename (Nate names it); scaffold from the
-  governance container-template **after** the template's
+- **Console** gets its own repo — **`frigg`** (named 2026-08-02); scaffold
+  from the governance container-template **after** the template's
   `vault.ravenhelm.dev` default is fixed (Project A finding — don't inherit
   the hairpin).
 - Branch/PR discipline per CLAUDE.md: worktrees, no direct-to-main, Forgejo
@@ -251,4 +292,7 @@ surfaces for **all** domains land in M0 — writability arrives per-milestone.
 | 5 | Fleet **Free-tier API** coverage for posture/MDM delivery needs verification (premium gating exists server-side too, cf. `--disable-setup-experience`) | M0 adapter spike |
 | 6 | FreeIPA deployment state (primary/replica per Apr arch notes) must be verified live before M0 — verify-before-build | M0 precondition |
 | 7 | Multi-tenant from day one enlarges every milestone; if timeline slips, fallback is admin-only M0 with tenancy scaffolded but Cedar policies deferred | Nate's call if it bites |
-| 8 | Internal routing/TLS (Project A) should land before Console↔authority traffic goes live, or the new service is born on cleartext/hairpinned paths | Project A remediation |
+| 8 | Internal routing/TLS (Project A) before Console↔authority traffic — now a **formal hard gate** in the master architecture | Project A remediation |
+| 9 | Heimdall `owner_user_id` ≠ `rig_user_id` (R1, World B) — Frigg reads via the mapping chain; spine remediation is RAV-1164/1192, owned by the Identity Spine Remediation project, NOT Frigg | Identity Spine Remediation |
+| 10 | Merge-queue decisions (accept/reject cross-plane assertions) are governance actions — deferred to M2+ with their own Cedar policies; M0 is read-only (R6) | M2 charter |
+| 11 | `kvasir_*` Bifrost tools (agent-facing surface) must carry confidence per D8 — design with the receipt schema, build post-M1 | receipt-schema ticket |
