@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# kvasir cert <issue|renew|revoke|verify|bundle> --class CLASS PRINCIPAL
+#
+# Routes certificate work to Dogtag, step-ca, or SPIRE. Never holds a CA key.
+# Defaults to dry-run. --apply mutates only the issuing authority, never a
+# private key path on this laptop.
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/pki.sh
+source "${KVASIR_DIR}/lib/pki.sh"
+# shellcheck source=../lib/stepca.sh
+source "${KVASIR_DIR}/lib/stepca.sh"
+# shellcheck source=../lib/spire.sh
+source "${KVASIR_DIR}/lib/spire.sh"
+# shellcheck source=../lib/freeipa.sh
+source "${KVASIR_DIR}/lib/freeipa.sh"
+# shellcheck source=../lib/op.sh
+source "${KVASIR_DIR}/lib/op.sh"
+
+kvasir::load_env
+pki::defaults
+
+usage() {
+  cat <<EOF
+Usage: kvasir cert <issue|renew|revoke|verify|bundle> [options]
+
+Issue, renew, revoke, or verify certificates for users, hosts, and services.
+Workloads use SPIRE SVIDs, not Dogtag leaves.
+
+Commands:
+  issue     request a cert from the class's authority
+  renew     re-issue before expiry (same routing)
+  revoke    ask the issuing authority to revoke
+  verify    check chain, pin, and remaining lifetime
+  bundle    install/pin the step-ca trust bundle (lab throwaway root)
+
+Options:
+  --class CLASS     user|host|endpoint|service|workload  (required except bundle)
+  PRINCIPAL         IPA user, host FQDN, svc account, or workload name
+  --csr FILE        PEM CSR generated on the subject (required for Dogtag/step-ca --apply)
+  --selector SEL    SPIRE selector (workload class; default unix:user:PRINCIPAL)
+  --apply           mutate (default: dry-run)
+  --install-agent   workload only: install a SPIRE agent on a named host
+  --mint-token      workload only: mint a join token into 1Password (never printed)
+
+See docs/provisioning-matrix.md.
+EOF
+}
+
+KVASIR_WANT_HELP=0
+CLASS=""
+CSR=""
+SELECTOR=""
+INSTALL_AGENT=0
+MINT_TOKEN=0
+ACTION=""
+PRINCIPAL=""
+
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+
+while (( $# > 0 )); do
+  case "$1" in
+    --class) CLASS="$2"; shift 2 ;;
+    --csr) CSR="$2"; shift 2 ;;
+    --selector) SELECTOR="$2"; shift 2 ;;
+    --install-agent) INSTALL_AGENT=1; shift ;;
+    --mint-token) MINT_TOKEN=1; shift ;;
+    issue|renew|revoke|verify|bundle)
+      [[ -z "$ACTION" ]] && ACTION="$1" || kvasir::die "unexpected extra action: $1"
+      shift
+      ;;
+    "") shift ;;
+    *)
+      if [[ -z "$PRINCIPAL" ]]; then
+        PRINCIPAL="$1"
+      else
+        kvasir::die "unexpected arg: $1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$ACTION" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$ACTION" != "bundle" && -z "$CLASS" ]]; then
+  kvasir::die "--class is required for ${ACTION}"
+fi
+if [[ "$ACTION" != "bundle" && -z "$PRINCIPAL" ]]; then
+  kvasir::die "principal is required for ${ACTION}"
+fi
+
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+cert::dogtag_mutate() {
+  local verb="$1"
+  [[ -n "$CSR" && -f "$CSR" ]] || kvasir::die "--csr FILE generated on the subject is required for Dogtag ${verb} --apply"
+  ipa::admin_kinit_in_container
+  case "$verb" in
+    issue|renew)
+      ipa::cert_request "$CSR" "$PRINCIPAL" "$(pki::profile_for "$CLASS")"
+      ;;
+    revoke)
+      local out serial
+      out="$(ipa::cert_find "$PRINCIPAL")"
+      serial="$(printf '%s\n' "$out" | awk -F': ' '/^Serial number \(hex\)/ {print $2; exit}')"
+      [[ -n "$serial" ]] || kvasir::die "no Dogtag cert serial found for principal ${PRINCIPAL}"
+      ipa::cert_revoke "$serial"
+      ;;
+  esac
+}
+
+cert::stepca_mutate() {
+  local verb="$1" crt_out
+  [[ -n "$CSR" && -f "$CSR" ]] || kvasir::die "--csr FILE generated on the subject is required for step-ca ${verb} --apply"
+  crt_out="$(mktemp /tmp/kvasir-stepca.XXXXXX.crt)"
+  trap 'rm -f "$crt_out"' RETURN
+  stepca::sign_csr "$CSR" "$crt_out" "$PRINCIPAL"
+  kvasir::log info "step-ca leaf cert at ${crt_out} — install on ${PRINCIPAL} with matching private key"
+}
+
+cert::spire_mutate() {
+  local verb="$1" selector="$SELECTOR"
+  [[ -z "$selector" ]] && selector="unix:user:${PRINCIPAL}"
+  case "$verb" in
+    issue|renew)
+      spire::entry_create "$PRINCIPAL" "$selector"
+      if (( MINT_TOKEN == 1 )); then
+        spire::join_token_mint "$PRINCIPAL"
+      fi
+      ;;
+    revoke)
+      spire::entry_delete "$PRINCIPAL"
+      ;;
+  esac
+}
+
+case "$ACTION" in
+  bundle)
+    stepca::bundle_plan
+    if kvasir::is_dry_run; then
+      kvasir::log info "DRY: would pin and install $(stepca::roots_url)"
+      exit 0
+    fi
+    stepca::verify_pin
+    kvasir::log info "bundle pin verified. OS trust-store install is host-local; use enroll endpoint to push it."
+    ;;
+  issue|renew)
+    pki::issue_plan "$CLASS" "$PRINCIPAL"
+    authority="$(pki::authority_for "$CLASS")"
+    if kvasir::is_dry_run; then
+      exit 0
+    fi
+    case "$authority" in
+      dogtag) cert::dogtag_mutate "$ACTION" ;;
+      step-ca)
+        cert::stepca_mutate "$ACTION"
+        ;;
+      spire)
+        spire::preflight
+        cert::spire_mutate "$ACTION"
+        if (( INSTALL_AGENT == 1 )); then
+          kvasir::log warn "--install-agent is opt-in; run enroll workload --install-agent on a named host separately"
+        fi
+        ;;
+    esac
+    ;;
+  revoke)
+    pki::issue_plan "$CLASS" "$PRINCIPAL"
+    kvasir::log warn "revoke asks ${CLASS}'s authority to drop the credential; admission/quarantine is a later gate"
+    if kvasir::is_dry_run; then
+      exit 0
+    fi
+    authority="$(pki::authority_for "$CLASS")"
+    case "$authority" in
+      dogtag) cert::dogtag_mutate revoke ;;
+      spire)
+        spire::preflight
+        cert::spire_mutate revoke
+        ;;
+      step-ca)
+        kvasir::die "step-ca revoke --apply is not wired; revoke at the CA or rotate the leaf on ${PRINCIPAL}"
+        ;;
+    esac
+    ;;
+  verify)
+    authority="$(pki::authority_for "$CLASS")"
+    kvasir::log info "verify class=${CLASS} principal=${PRINCIPAL} authority=${authority}"
+    case "$authority" in
+      step-ca)
+        if [[ -n "${KVASIR_STEPCA_FINGERPRINT}" ]]; then
+          stepca::verify_pin
+        else
+          kvasir::die "cannot verify step-ca without KVASIR_STEPCA_FINGERPRINT"
+        fi
+        ;;
+      dogtag)
+        if ! kvasir::is_dry_run; then
+          ipa::dogtag_preflight
+          ipa::cert_find "$PRINCIPAL"
+        else
+          kvasir::log info "probe: ipa cert-find --principal ${PRINCIPAL}"
+        fi
+        ;;
+      spire)
+        spire::preflight
+        if ! kvasir::is_dry_run; then
+          spire::entry_show "$(pki::spiffe_id "$PRINCIPAL")"
+        fi
+        ;;
+    esac
+    ;;
+  *)
+    kvasir::die "unknown cert action: ${ACTION}"
+    ;;
+esac

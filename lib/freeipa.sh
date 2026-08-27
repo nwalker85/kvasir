@@ -60,13 +60,38 @@ ipa::docker_exec() {
   return 1
 }
 
-ipa::admin_kinit_in_container() {
-  # Drop the admin password into the container at /tmp/admin.pw and kinit.
+ipa::directory_manager_password() {
+  local field="${KVASIR_OP_FREEIPA_DM_PASSWORD_FIELD:-Directory Manager Password}"
   local pw
-  pw="$(op::read_field "${KVASIR_OP_FREEIPA_SERVER_ITEM}" password)"
-  ipa::docker_exec "umask 077; kinit admin >/dev/null" "$pw" \
-    || kvasir::die "kinit admin failed in freeipa container"
-  kvasir::log debug "kinit admin OK in ${KVASIR_FREEIPA_CONTAINER}"
+  pw="$(op item get "${KVASIR_OP_FREEIPA_SERVER_ITEM}" --vault "${KVASIR_OP_VAULT}" \
+    --fields "$field" --reveal 2>/dev/null)" \
+    || kvasir::die "could not read Directory Manager password (${field})"
+  printf '%s' "$pw"
+}
+
+ipa::admin_password() {
+  local field="${KVASIR_OP_FREEIPA_ADMIN_PASSWORD_FIELD:-password}"
+  local pw
+  pw="$(op item get "${KVASIR_OP_FREEIPA_SERVER_ITEM}" --vault "${KVASIR_OP_VAULT}" \
+    --fields "$field" --reveal 2>/dev/null)" \
+    || pw="$(op::read_field "${KVASIR_OP_FREEIPA_SERVER_ITEM}" password)"
+  [[ -n "$pw" ]] || kvasir::die "could not read IPA admin Kerberos password (${field})"
+  printf '%s' "$pw"
+}
+
+ipa::admin_kinit_in_container() {
+  local pw principal="${KVASIR_FREEIPA_KINIT_PRINCIPAL:-admin}"
+  pw="$(ipa::admin_password)"
+  ipa::docker_exec "umask 077; kinit ${principal} >/dev/null" "$pw" \
+    || kvasir::die "kinit ${principal} failed in freeipa container"
+  kvasir::log debug "kinit ${principal} OK in ${KVASIR_FREEIPA_CONTAINER}"
+}
+
+ipa::admin_kinit_optional() {
+  local pw principal="${KVASIR_FREEIPA_KINIT_PRINCIPAL:-admin}"
+  pw="$(ipa::admin_password)"
+  ipa::docker_exec "umask 077; kinit ${principal} >/dev/null" "$pw" && return 0
+  return 1
 }
 
 # Run a single `ipa` subcommand in the container. Stdout returned to caller.
@@ -77,6 +102,103 @@ ipa::cmd() {
     escaped+=( "$(printf '%q' "$arg")" )
   done
   ipa::docker_exec "ipa ${escaped[*]}"
+}
+
+# Submit a CSR generated on the subject. Kvasir never sees the private key.
+# Args: <csr-file> <principal> <profile>
+ipa::cert_request() {
+  local csr="$1" principal="$2" profile="$3"
+  local csr_pem principal_q profile_q
+  [[ -f "$csr" ]] || kvasir::die "CSR not found: ${csr}"
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: ipa cert-request --principal ${principal} --profile ${profile} < ${csr}"
+    return 0
+  fi
+  csr_pem="$(cat "$csr")"
+  principal_q="$(printf '%q' "$principal")"
+  profile_q="$(printf '%q' "$profile")"
+  ipa::docker_exec \
+    "cat >/tmp/kvasir.csr && ipa cert-request /tmp/kvasir.csr --principal ${principal_q} --profile ${profile_q}; rc=\$?; rm -f /tmp/kvasir.csr; exit \$rc" \
+    "$csr_pem"
+}
+
+ipa::cert_find() {
+  ipa::cmd cert-find --principal "$1"
+}
+
+ipa::cert_revoke() {
+  ipa::cmd cert-revoke "$1"
+}
+
+ipa::ca_show() {
+  ipa::cmd ca-show
+}
+
+ipa::ldap_base_dn() {
+  local domain="${KVASIR_FREEIPA_DOMAIN:-ravenhelm.dev}"
+  local part joined=""
+  local -a parts=()
+  IFS=. read -r -a parts <<<"${domain}"
+  for part in "${parts[@]}"; do
+    if [[ -n "$joined" ]]; then joined+=","
+    fi
+    joined+="dc=${part}"
+  done
+  printf '%s' "$joined"
+}
+
+# Read-only Dogtag reachability via LDAP (Directory Manager). No Kerberos ticket.
+ipa::docker_bash_script() {
+  local script="$1"
+  local host rc host_list
+  host_list="${KVASIR_FREEIPA_HOST}"
+  [[ -n "${KVASIR_FREEIPA_HOST_FALLBACKS}" ]] && host_list+=" ${KVASIR_FREEIPA_HOST_FALLBACKS}"
+  for host in ${host_list}; do
+    if printf '%s' "$script" | ssh -o BatchMode=yes -o ConnectTimeout=8 "${host}"       "docker exec -i '${KVASIR_FREEIPA_CONTAINER}' bash -s"; then
+      [[ "$host" != "${KVASIR_FREEIPA_HOST}" ]] && kvasir::log info "freeipa host fallback selected: ${host}"
+      return 0
+    fi
+    kvasir::log warn "freeipa host ${host} unavailable for docker bash; trying next fallback"
+  done
+  return 1
+}
+
+ipa::ldap_ca_probe() {
+  local pw ldap_base pw_b64 script
+  pw="$(ipa::directory_manager_password)"
+  ldap_base="$(ipa::ldap_base_dn)"
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: ldapsearch Dogtag CA cn=ipa,cn=cas,cn=ca,${ldap_base}"
+    return 0
+  fi
+  pw_b64="$(printf '%s' "$pw" | base64 | tr -d '
+')"
+  script="$(cat <<EOS
+set -euo pipefail
+PW="\$(printf '%s' '${pw_b64}' | base64 -d)"
+f="\$(mktemp)"
+printf '%s' "\$PW" >"\$f"
+ldapsearch -x -H ldap://localhost -b "cn=ipa,cn=cas,cn=ca,${ldap_base}" \
+  -D "cn=Directory Manager" -y "\$f" dn 2>/dev/null | grep -q '^dn:'
+rm -f "\$f"
+EOS
+)"
+  ipa::docker_bash_script "$script"     || kvasir::die "Dogtag CA LDAP probe failed in ${KVASIR_FREEIPA_CONTAINER}"
+  kvasir::log info "dogtag CA LDAP probe ok (cn=ipa,cn=cas,cn=ca,${ldap_base})"
+}
+
+ipa::dogtag_preflight() {
+  kvasir::log info "dogtag: realm=${KVASIR_FREEIPA_REALM} container=${KVASIR_FREEIPA_CONTAINER}"
+  if kvasir::is_dry_run; then
+    kvasir::log info "DRY: ldap CA probe + optional ipa ca-show"
+    return 0
+  fi
+  ipa::ldap_ca_probe
+  if ipa::admin_kinit_optional; then
+    ipa::ca_show >/dev/null && kvasir::log info "dogtag ipa ca-show ok"
+  else
+    kvasir::log warn "ipa ca-show skipped — admin Kerberos kinit failed; LDAP CA probe passed"
+  fi
 }
 
 # host-add (always fresh) with a hex OTP. Echoes the OTP on stdout.

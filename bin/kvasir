@@ -22,6 +22,26 @@ while [[ -L "${KVASIR_SOURCE}" ]]; do
 done
 KVASIR_BIN="$(cd -P "$(dirname "${KVASIR_SOURCE}")" && pwd)"
 
+kvasir::exec_cmd() {
+  local script="$1"; shift
+  exec "${KVASIR_BIN}/${script}" "$@"
+}
+
+kvasir::enroll_help() {
+  cat <<EOF
+Usage: kvasir enroll <user|host|endpoint|service|workload> [...]
+
+  user       FreeIPA + Zitadel + 1Password identity
+  host       FreeIPA realm join (Linux or macOS)
+  endpoint   host + pinned trust bundle + endpoint TLS (Rig + Fleet required)
+  service    host-scoped IPA root service account
+  workload   SPIRE registration (agents not installed unless asked)
+
+Hyphenated aliases (enroll-user, enroll-host, service-account) still work.
+Certificate issuance is kvasir cert, not a side effect of enroll host.
+EOF
+}
+
 case "${1:-}" in
   ""|-h|--help|help)
     cat <<EOF
@@ -29,27 +49,24 @@ kvasir — Ravenhelm identity-onboarding automation.
 
 Usage: kvasir <command> [args...]
 
-Commands:
-  enroll-host <target> [--ip IP] [--apply]
-      Joins a Linux host to the FreeIPA realm.
+Enrollment:
+  enroll user|host|endpoint|service|workload
+  enroll-host, enroll-user, service-account   (stable aliases)
 
-  service-account <target> [--ip IP] [--apply]
-      Ensures the host-scoped root service account and sudo rule exist.
+PKI:
+  pki-probe [--discover-pin]   read-only Dogtag + step-ca + SPIRE health
 
+Certificates:
+  cert issue|renew|revoke|verify|bundle --class user|host|endpoint|service|workload
+      Routes to Dogtag, step-ca, or SPIRE. Never holds a CA key.
+
+Other:
   install-service-account-key <target> [--ssh-host HOST] [--bootstrap-user USER] [--apply]
-      Installs the service account key into host-local authorized_keys.
-
   verify-service-account <target> [--ssh-host HOST] [--probe-user USER]
-      Verifies SSH login and passwordless sudo for a host service account.
-
-  enroll-user <user> <email> --first F --last L [--apply]
-      Provisions an identity in FreeIPA + Zitadel + 1P.
-
   add-ssh-key [--fido2 | --pubkey FILE] [--user USER] [--apply]
-      Generates/imports an SSH key and registers it on a FreeIPA user.
-
+  receipt get <enrollment-id>
+  verify <enrollment-id>
   version
-      Print version and resolved configuration.
 
 Flags accepted by all commands:
   --apply     actually mutate (default: dry-run)
@@ -57,16 +74,48 @@ Flags accepted by all commands:
   --quiet     warn+ only
   -h/--help   per-command help
 
-See docs/runbook.md for the full onboarding flow.
+See docs/provisioning-matrix.md and docs/runbook.md.
 EOF
     ;;
   version)
-    echo "kvasir 0.1.0"
+    echo "kvasir 0.2.0"
     echo "root: ${KVASIR_BIN%/*}"
     ;;
-  enroll-host|service-account|install-service-account-key|verify-service-account|enroll-user|add-ssh-key)
+  enroll)
+    shift
+    case "${1:-}" in
+      ""|-h|--help) kvasir::enroll_help ;;
+      user) shift; kvasir::exec_cmd enroll-user "$@" ;;
+      host) shift; kvasir::exec_cmd enroll-host "$@" ;;
+      endpoint) shift; kvasir::exec_cmd enroll-endpoint "$@" ;;
+      service) shift; kvasir::exec_cmd service-account "$@" ;;
+      workload) shift; kvasir::exec_cmd enroll-workload "$@" ;;
+      *)
+        echo "unknown enroll class: ${1}" >&2
+        kvasir::enroll_help >&2
+        exit 64
+        ;;
+    esac
+    ;;
+  cert)
+    shift
+    kvasir::exec_cmd cert "$@"
+    ;;
+  receipt)
+    shift
+    kvasir::exec_cmd receipt "$@"
+    ;;
+  verify)
+    shift
+    kvasir::exec_cmd verify "$@"
+    ;;
+  pki-probe)
+    shift
+    kvasir::exec_cmd pki-probe "$@"
+    ;;
+  enroll-host|service-account|install-service-account-key|verify-service-account|enroll-user|add-ssh-key|enroll-endpoint|enroll-workload)
     cmd="$1"; shift
-    exec "${KVASIR_BIN}/${cmd}" "$@"
+    kvasir::exec_cmd "$cmd" "$@"
     ;;
   *)
     echo "unknown command: $1" >&2

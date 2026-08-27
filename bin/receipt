@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# kvasir receipt get <enrollment-id>
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/receipt.sh
+source "${KVASIR_DIR}/lib/receipt.sh"
+
+kvasir::load_env
+
+usage() {
+  cat <<EOF
+Usage: kvasir receipt get <enrollment-id>
+
+Print a local enrollment receipt. Receipts must not contain secrets.
+EOF
+}
+
+KVASIR_WANT_HELP=0
+ACTION=""
+ID=""
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    get) ACTION=get; shift ;;
+    "") shift ;;
+    *) [[ -z "$ID" ]] && ID="$1" || kvasir::die "unexpected arg: $1"; shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ "$ACTION" != "get" || -z "$ID" ]]; then
+  usage
+  exit 0
+fi
+
+receipt::get "$ID"

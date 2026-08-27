@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# kvasir enroll endpoint <target> --rig-principal REF --fleet-host-id ID
+#
+# Orchestrates host identity (FreeIPA) + trust bundle (step-ca) + endpoint TLS.
+# Does not claim Verified unless Rig and Fleet evidence can be proved.
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/pki.sh
+source "${KVASIR_DIR}/lib/pki.sh"
+# shellcheck source=../lib/stepca.sh
+source "${KVASIR_DIR}/lib/stepca.sh"
+# shellcheck source=../lib/receipt.sh
+source "${KVASIR_DIR}/lib/receipt.sh"
+
+kvasir::load_env
+pki::defaults
+
+usage() {
+  cat <<EOF
+Usage: kvasir enroll endpoint <target> --rig-principal REF --fleet-host-id ID [--apply]
+
+Higher-level host enrollment: FreeIPA join, pinned step-ca bundle, endpoint TLS.
+Does not mutate OPNsense. Does not install SPIRE agents.
+
+  --rig-principal    stable Rig endpoint principal (required)
+  --fleet-host-id    Fleet host ID, not a display name (required)
+  --apply            mutate (default: dry-run)
+EOF
+}
+
+KVASIR_WANT_HELP=0
+TARGET=""
+RIG_PRINCIPAL=""
+FLEET_HOST_ID=""
+
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    --rig-principal) RIG_PRINCIPAL="$2"; shift 2 ;;
+    --fleet-host-id) FLEET_HOST_ID="$2"; shift 2 ;;
+    "") shift ;;
+    *) [[ -z "$TARGET" ]] && TARGET="$1" || kvasir::die "unexpected arg: $1"; shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$TARGET" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ -z "$RIG_PRINCIPAL" || -z "$FLEET_HOST_ID" ]]; then
+  kvasir::die "enroll endpoint requires --rig-principal and --fleet-host-id (no hostname guessing)"
+fi
+
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+cat <<EOF
+endpoint-plan:
+  target: ${TARGET}
+  rig_principal: ${RIG_PRINCIPAL}
+  fleet_host_id: ${FLEET_HOST_ID}
+  steps:
+    1. resolve Rig principal (read-only) — BLOCKED if KVASIR_RIG_URL unset
+    2. lookup Fleet host ${FLEET_HOST_ID} — BLOCKED if KVASIR_FLEET_URL unset
+    3. kvasir enroll host ${TARGET} (FreeIPA / Dogtag host identity)
+    4. pin step-ca bundle $(stepca::roots_url)
+    5. issue endpoint TLS profile $(pki::profile_for endpoint) with key on ${TARGET}
+    6. write receipt (no secrets)
+  authorities:
+    identity: dogtag
+    trust_bundle: step-ca
+    endpoint_tls: step-ca
+    workload_mtls: not this command (see enroll workload)
+EOF
+
+if [[ -z "${KVASIR_RIG_URL:-}" ]]; then
+  kvasir::log warn "KVASIR_RIG_URL unset — Rig preflight cannot pass"
+fi
+if [[ -z "${KVASIR_FLEET_URL:-}" ]]; then
+  kvasir::log warn "KVASIR_FLEET_URL unset — Fleet custody cannot pass"
+fi
+
+if kvasir::is_dry_run; then
+  pki::issue_plan endpoint "$TARGET"
+  stepca::bundle_plan
+  exit 0
+fi
+
+if [[ -z "${KVASIR_RIG_URL:-}" || -z "${KVASIR_FLEET_URL:-}" ]]; then
+  kvasir::die "enroll endpoint --apply is fail-closed without KVASIR_RIG_URL and KVASIR_FLEET_URL"
+fi
+pki::require_fingerprint
+stepca::verify_pin
+
+APPLY=()
+kvasir::is_dry_run || APPLY=(--apply)
+"${KVASIR_DIR}/bin/enroll-host" "$TARGET" "${APPLY[@]}"
+
+kvasir::die "endpoint TLS install is host-local after IPA join; remaining steps are in the plan (no key escrow through kvasir)"

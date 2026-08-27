@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# kvasir verify <enrollment-id|principal>
+# Read-only re-check. Distinct from verify-service-account.
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/receipt.sh
+source "${KVASIR_DIR}/lib/receipt.sh"
+
+kvasir::load_env
+
+usage() {
+  cat <<EOF
+Usage: kvasir verify <enrollment-id>
+
+Re-reads a local receipt. Live authority probes belong to:
+  kvasir cert verify --class CLASS PRINCIPAL
+  kvasir verify-service-account <host>
+EOF
+}
+
+KVASIR_WANT_HELP=0
+ID=""
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    "") shift ;;
+    *) [[ -z "$ID" ]] && ID="$1" || kvasir::die "unexpected arg: $1"; shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$ID" ]]; then
+  usage
+  exit 0
+fi
+
+receipt::get "$ID"
+kvasir::log info "receipt present. Run cert verify / verify-service-account for live proof."

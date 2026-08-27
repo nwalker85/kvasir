@@ -91,6 +91,34 @@ kvasir verify-service-account grani --ssh-host 100.106.47.41
 - **`verify-service-account` shows missing host `authorized_keys`** — run `kvasir install-service-account-key <host> --apply` or pass `--ssh-host` if the route differs from the host identity.
 - **`verify-service-account` shows `sudo -n true` failed** — refresh the host sudo rule with `kvasir service-account <host> --apply`, then clear/restart the target SSSD sudo cache.
 
+## Certificates and service identity
+
+Identity join (`enroll-host`, `enroll-user`, `service-account`) does **not**
+issue TLS or SVIDs. Use the cert/workload commands, which stay dry-run
+unless `--apply` is passed.
+
+```bash
+# People / IPA service users / IPA hosts → Dogtag
+kvasir cert issue --class user nwalker
+kvasir cert issue --class service svc-grani-root --csr ./svc.csr
+kvasir cert issue --class host grani.ravenhelm.dev --csr ./host.csr
+
+# Trust bundle + internal host TLS → step-ca (lab throwaway root, not askr)
+export KVASIR_STEPCA_FINGERPRINT='<sha256 of the live roots.pem>'
+kvasir cert bundle
+kvasir enroll endpoint grani \
+  --rig-principal rig://endpoints/grani \
+  --fleet-host-id 12
+
+# Workload mTLS → SPIRE (no agent install unless you opt in)
+kvasir enroll workload audio-app/frigate-recognizer
+kvasir cert issue --class workload audio-app/frigate-recognizer
+```
+
+`--apply` for Dogtag requires a CSR generated on the subject. Kvasir will
+not mint a self-signed leftover or copy a private key. SPIRE join tokens
+are never printed. See [`provisioning-matrix.md`](provisioning-matrix.md).
+
 ## Provisioning a new user
 
 ```bash
