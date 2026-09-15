@@ -35,3 +35,17 @@ grep -q 'parent: spiffe://ravenmask.net/infra/spire-agent/hrafngud' <<<"$d" \
   || fail "default parent regressed"
 
 echo "ok: spire agent host"
+
+# The address the AGENT DIALS is not the host WE SSH TO. Baking KVASIR_SPIRE_HOST
+# (an operator-side ssh alias) into agent.conf gave grani a name only the
+# operator's laptop could resolve; the agent crash-looped with
+#   dns: A record lookup error: lookup hrafngud-ts-svc on 127.0.0.53:53
+out2="$("${KVASIR_DIR}/bin/kvasir" enroll workload odinsrunes/live-hub \
+         --agent-host grani --install-agent 2>&1)"
+grep -q 'server:     hrafngud.ravenmask.net:8081' <<<"$out2" \
+  || fail "agent must dial a name the TARGET resolves, not the ssh alias"
+grep -q 'ssh via:' <<<"$out2" \
+  || fail "the plan should state the ssh alias separately from the dial address"
+grep -qE 'server: +hrafngud-ts-svc' <<<"$out2" \
+  && fail "ssh alias leaked back into the server address"
+echo "ok: server address is not the ssh alias"

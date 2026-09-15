@@ -12,6 +12,12 @@ spire::defaults() {
   KVASIR_SPIRE_AGENT_IMAGE="${KVASIR_SPIRE_AGENT_IMAGE:-ghcr.io/spiffe/spire-agent:1.12.4}"
   KVASIR_SPIRE_AGENT_DATA_DIR="${KVASIR_SPIRE_AGENT_DATA_DIR:-/opt/ravenhelm/data/spire}"
   KVASIR_SPIRE_AGENT_SOCKET_DIR="${KVASIR_SPIRE_AGENT_SOCKET_DIR:-/run/spire/sockets}"
+  # The address the AGENT DIALS is not the host WE SSH TO. KVASIR_SPIRE_HOST is an
+  # ssh alias resolved by the operator's ~/.ssh/config; baking it into agent.conf
+  # gave the agent a name only this laptop can resolve, and it crash-looped with
+  #   dns: A record lookup error: lookup hrafngud-ts-svc
+  # Use a name the TARGET can resolve. A DNS name, never a Tailscale address.
+  KVASIR_SPIRE_SERVER_ADDRESS="${KVASIR_SPIRE_SERVER_ADDRESS:-hrafngud.ravenmask.net}"
   KVASIR_SPIRE_JOIN_TOKEN_TTL="${KVASIR_SPIRE_JOIN_TOKEN_TTL:-600}"
   KVASIR_SPIRE_JOIN_TOKEN_OP_PREFIX="${KVASIR_SPIRE_JOIN_TOKEN_OP_PREFIX:-SPIRE Join}"
 }
@@ -216,7 +222,8 @@ spire::agent_install_plan() {
 spire-agent:
   host:       ${KVASIR_SPIRE_AGENT_HOST} (ssh: ${host})
   image:      ${KVASIR_SPIRE_AGENT_IMAGE}
-  server:     ${KVASIR_SPIRE_HOST}:8081 trust_domain=${KVASIR_SPIRE_TRUST_DOMAIN}
+  server:     ${KVASIR_SPIRE_SERVER_ADDRESS}:8081 (as resolved BY ${KVASIR_SPIRE_AGENT_HOST})
+  ssh via:    ${KVASIR_SPIRE_HOST} (operator-side alias, never used as an address)
   config:     ${KVASIR_SPIRE_AGENT_DATA_DIR}/conf/agent.conf
   socket:     ${KVASIR_SPIRE_AGENT_SOCKET_DIR}/agent.sock
   join token: minted, stored in 1Password, never printed
@@ -249,7 +256,7 @@ spire::agent_install() {
   ssh -o BatchMode=yes -o ConnectTimeout=15 "$host" \
       "SPIRE_JOIN_TOKEN='${token}' \
        SPIRE_IMAGE='${KVASIR_SPIRE_AGENT_IMAGE}' \
-       SPIRE_SERVER='${KVASIR_SPIRE_HOST}' \
+       SPIRE_SERVER='${KVASIR_SPIRE_SERVER_ADDRESS}' \
        SPIRE_TRUST_DOMAIN='${KVASIR_SPIRE_TRUST_DOMAIN}' \
        SPIRE_DATA='${KVASIR_SPIRE_AGENT_DATA_DIR}' \
        SPIRE_SOCKETS='${KVASIR_SPIRE_AGENT_SOCKET_DIR}' bash -s" <<'REMOTE'
