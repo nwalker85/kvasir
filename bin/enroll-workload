@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kvasir enroll workload <name> [--selector unix:user:NAME] [--install-agent]
+# kvasir enroll workload <name> [--selector unix:user:NAME] [--agent-host HOST] [--install-agent]
 #
 # Registers a SPIFFE identity with SPIRE. Does not install agents unless asked.
 set -euo pipefail
@@ -21,13 +21,17 @@ pki::defaults
 
 usage() {
   cat <<EOF
-Usage: kvasir enroll workload <name> [--selector SEL] [--install-agent] [--apply]
+Usage: kvasir enroll workload <name> [--selector SEL] [--agent-host HOST]
+                            [--install-agent] [--mint-token] [--apply]
 
 Registers a workload with SPIRE under ${KVASIR_SPIRE_TRUST_DOMAIN}.
 
   NAME             workload path fragment (e.g. audio-app/frigate-recognizer)
   --selector       SPIRE selector (default: unix:user:<name>)
-  --install-agent  also install a SPIRE agent on a named host (opt-in, reviewed)
+  --agent-host     host whose agent VOUCHES for this workload (default: hrafngud).
+                   This decides where the SVID can actually be obtained: an entry
+                   parented to hrafngud's agent is unusable by a workload on grani.
+  --install-agent  install a SPIRE agent on --agent-host if it has none
   --apply          mutate (default: dry-run)
 
 Join tokens are never printed. Use --mint-token to store one in 1Password.
@@ -37,6 +41,7 @@ EOF
 KVASIR_WANT_HELP=0
 NAME=""
 SELECTOR=""
+AGENT_HOST=""
 INSTALL_AGENT=0
 MINT_TOKEN=0
 
@@ -45,6 +50,7 @@ set -- "${KVASIR_REMAINING[@]:-}"
 while (( $# > 0 )); do
   case "$1" in
     --selector) SELECTOR="$2"; shift 2 ;;
+    --agent-host) AGENT_HOST="$2"; shift 2 ;;
     --install-agent) INSTALL_AGENT=1; shift ;;
     --mint-token) MINT_TOKEN=1; shift ;;
     "") shift ;;
@@ -59,14 +65,29 @@ fi
 
 SELECTOR="${SELECTOR:-}"
 [[ -z "$SELECTOR" ]] && SELECTOR="unix:user:${NAME}"
+# Export BEFORE any plan is rendered, so the dry run shows the parent that apply
+# will really use.
+if [[ -n "$AGENT_HOST" ]]; then
+  export KVASIR_SPIRE_AGENT_HOST="$AGENT_HOST"
+  # defaults() already ran at load and froze the parent from the old host; clear
+  # the derived value so it is recomputed from the host just named.
+  unset KVASIR_SPIRE_AGENT_SPIFFE_ID
+  spire::defaults
+fi
 kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
 
 pki::issue_plan workload "$NAME"
-spire::entry_create_plan "$NAME"
+spire::entry_create_plan "$NAME" "$SELECTOR"
 kvasir::log info "selector=${SELECTOR}"
 
 if (( INSTALL_AGENT == 1 )); then
-  kvasir::log warn "--install-agent is opt-in and will not run without a named host review"
+  spire::agent_install_plan
+elif ! kvasir::is_dry_run; then
+  # Refuse rather than register an identity nobody can obtain.
+  if ! spire::agent_installed; then
+    kvasir::die "no SPIRE agent on ${KVASIR_SPIRE_AGENT_HOST}: the entry would be \
+unusable there. Re-run with --install-agent, or --agent-host a host that has one."
+  fi
 fi
 
 if kvasir::is_dry_run; then
@@ -75,10 +96,11 @@ if kvasir::is_dry_run; then
 fi
 
 spire::preflight
+# The agent comes first: it is the parent the entry names.
+if (( INSTALL_AGENT == 1 )); then
+  spire::agent_install
+fi
 spire::entry_create "$NAME" "$SELECTOR"
 if (( MINT_TOKEN == 1 )); then
   spire::join_token_mint "$NAME"
-fi
-if (( INSTALL_AGENT == 1 )); then
-  kvasir::log warn "--install-agent is opt-in; install SPIRE agent on a named host separately"
 fi
