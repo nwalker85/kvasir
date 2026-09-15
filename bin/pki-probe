@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# kvasir pki-probe — read-only health check for Dogtag, step-ca, and SPIRE.
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/pki.sh
+source "${KVASIR_DIR}/lib/pki.sh"
+# shellcheck source=../lib/stepca.sh
+source "${KVASIR_DIR}/lib/stepca.sh"
+# shellcheck source=../lib/spire.sh
+source "${KVASIR_DIR}/lib/spire.sh"
+# shellcheck source=../lib/freeipa.sh
+source "${KVASIR_DIR}/lib/freeipa.sh"
+# shellcheck source=../lib/op.sh
+source "${KVASIR_DIR}/lib/op.sh"
+
+kvasir::load_env
+pki::defaults
+kvasir::require_cmd ssh curl openssl op jq
+
+KVASIR_DRY_RUN=0
+KVASIR_WANT_HELP=0
+kvasir::parse_common_flags "$@"
+
+if (( KVASIR_WANT_HELP )); then
+  cat <<EOF
+Usage: kvasir pki-probe [--discover-pin]
+
+Read-only probes:
+  dogtag   ipa ca-show inside ${KVASIR_FREEIPA_CONTAINER}
+  step-ca  fetch roots.pem and verify pin (or discover SHA-256)
+  spire    spire-server healthcheck + entry count
+
+  --discover-pin  print live step-ca root SHA-256 without requiring KVASIR_STEPCA_FINGERPRINT
+EOF
+  exit 0
+fi
+
+DISCOVER_PIN=0
+for arg in "${KVASIR_REMAINING[@]:-}"; do
+  [[ "$arg" == --discover-pin ]] && DISCOVER_PIN=1
+done
+
+fail=0
+printf '== dogtag (FreeIPA) ==\n'
+if ( ipa::dogtag_preflight ); then
+  printf 'ok\n'
+else
+  printf 'fail\n'
+  fail=1
+fi
+
+printf '== step-ca ==\n'
+if (( DISCOVER_PIN == 1 )); then
+  stepca::discover_pin || fail=1
+elif [[ -n "${KVASIR_STEPCA_FINGERPRINT:-}" ]]; then
+  stepca::verify_pin || fail=1
+else
+  kvasir::log warn "KVASIR_STEPCA_FINGERPRINT unset — use --discover-pin or set pin in env"
+  stepca::preflight || fail=1
+fi
+
+printf '== spire ==\n'
+if ( spire::preflight ); then
+  count="$(spire::server entry show 2>/dev/null | awk '/^Found/ {print $2; exit}')"
+  printf 'ok entries=%s trust_domain=%s\n' "${count:-unknown}" "${KVASIR_SPIRE_TRUST_DOMAIN}"
+else
+  printf 'fail\n'
+  fail=1
+fi
+
+exit "$fail"

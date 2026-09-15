@@ -18,6 +18,10 @@ workflow; minimal end-user input.
 | `kvasir verify-service-account <target>` | Verifies the 1Password item, target SSH reachability, FreeIPA/SSSD user resolution, SSSD SSH keys, host-local `authorized_keys`, service-account SSH login, and `sudo -n true` without prompting. Use `--ssh-host` and `--probe-user` when the identity host name and network route differ. |
 | `kvasir enroll-user <user> <email>` | Provisions a user in FreeIPA + Zitadel and stores credentials in 1Password (`FreeIPA <user>` item, ravenmask vault).                                                                                                                                                                                                                                                                                                |
 | `kvasir add-ssh-key --fido2`        | Generates a resident FIDO2 ed25519-sk key on the YubiKey, registers it on the FreeIPA user via `ipa user-mod --addattr=ipasshpubkey`, and wires up `~/.ssh/config` with a `Match user` block.                                                                                                                                                                                                                       |
+| `kvasir enroll {user,host,endpoint,service,workload}` | Nested aliases for the same workflows. `endpoint` adds pinned step-ca trust + host TLS. `workload` registers SPIRE; it does not install agents unless `--install-agent`. |
+| `kvasir cert issue --class CLASS PRINCIPAL` | Issues (or plans) a cert from Dogtag (user/host/service), step-ca (endpoint TLS / trust bundle), or SPIRE (workload SVID). Private keys stay on the subject. |
+| `kvasir cert bundle` | Pins the step-ca throwaway root. Refuses `--apply` without `KVASIR_STEPCA_FINGERPRINT`. |
+| `kvasir receipt get` / `kvasir verify` | Local enrollment receipts. No secrets. |
 
 
 ## Prerequisites
@@ -57,12 +61,21 @@ kvasir/
 │   ├── install-service-account-key
 │   ├── verify-service-account
 │   ├── enroll-user
+│   ├── enroll-endpoint
+│   ├── enroll-workload
+│   ├── cert
+│   ├── receipt
+│   ├── verify
 │   └── add-ssh-key
 ├── lib/
 │   ├── common.sh       # logging, dry-run, env, error trap
 │   ├── op.sh           # 1Password helpers
 │   ├── freeipa.sh      # ipa CLI via docker exec on FreeIPA host
-│   └── zitadel.sh      # mgmt/v1 + v2 REST
+│   ├── zitadel.sh      # mgmt/v1 + v2 REST
+│   ├── pki.sh          # class → Dogtag / step-ca / SPIRE
+│   ├── stepca.sh
+│   ├── spire.sh
+│   └── receipt.sh
 ├── etc/
 │   └── kvasir.env.example
 └── docs/
@@ -102,7 +115,21 @@ kvasir add-ssh-key --fido2 --apply
 
 # Provision a new identity
 kvasir enroll-user jdoe jdoe@example.com --first Jane --last Doe --apply
+
+# Plan a Dogtag user cert (CSR is generated on the subject)
+kvasir cert issue --class user jdoe
+
+# Plan SPIRE registration for a service
+kvasir enroll workload audio-app/frigate-recognizer
+
+# Endpoint enrollment requires explicit Rig + Fleet IDs
+kvasir enroll endpoint odin \
+  --rig-principal rig://endpoints/odin \
+  --fleet-host-id 42
 ```
+
+Certificate and provisioning routing is documented in
+[`docs/provisioning-matrix.md`](docs/provisioning-matrix.md).
 
 ## Background
 

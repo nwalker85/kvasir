@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# kvasir enroll workload <name> [--selector unix:user:NAME] [--install-agent]
+#
+# Registers a SPIFFE identity with SPIRE. Does not install agents unless asked.
+set -euo pipefail
+
+KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+source "${KVASIR_DIR}/lib/common.sh"
+# shellcheck source=../lib/pki.sh
+source "${KVASIR_DIR}/lib/pki.sh"
+# shellcheck source=../lib/spire.sh
+source "${KVASIR_DIR}/lib/spire.sh"
+# shellcheck source=../lib/op.sh
+source "${KVASIR_DIR}/lib/op.sh"
+# shellcheck source=../lib/receipt.sh
+source "${KVASIR_DIR}/lib/receipt.sh"
+
+kvasir::load_env
+pki::defaults
+
+usage() {
+  cat <<EOF
+Usage: kvasir enroll workload <name> [--selector SEL] [--install-agent] [--apply]
+
+Registers a workload with SPIRE under ${KVASIR_SPIRE_TRUST_DOMAIN}.
+
+  NAME             workload path fragment (e.g. audio-app/frigate-recognizer)
+  --selector       SPIRE selector (default: unix:user:<name>)
+  --install-agent  also install a SPIRE agent on a named host (opt-in, reviewed)
+  --apply          mutate (default: dry-run)
+
+Join tokens are never printed. Use --mint-token to store one in 1Password.
+EOF
+}
+
+KVASIR_WANT_HELP=0
+NAME=""
+SELECTOR=""
+INSTALL_AGENT=0
+MINT_TOKEN=0
+
+kvasir::parse_common_flags "$@"
+set -- "${KVASIR_REMAINING[@]:-}"
+while (( $# > 0 )); do
+  case "$1" in
+    --selector) SELECTOR="$2"; shift 2 ;;
+    --install-agent) INSTALL_AGENT=1; shift ;;
+    --mint-token) MINT_TOKEN=1; shift ;;
+    "") shift ;;
+    *) [[ -z "$NAME" ]] && NAME="$1" || kvasir::die "unexpected arg: $1"; shift ;;
+  esac
+done
+
+if (( KVASIR_WANT_HELP )) || [[ -z "$NAME" ]]; then
+  usage
+  exit 0
+fi
+
+SELECTOR="${SELECTOR:-}"
+[[ -z "$SELECTOR" ]] && SELECTOR="unix:user:${NAME}"
+kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
+
+pki::issue_plan workload "$NAME"
+spire::entry_create_plan "$NAME"
+kvasir::log info "selector=${SELECTOR}"
+
+if (( INSTALL_AGENT == 1 )); then
+  kvasir::log warn "--install-agent is opt-in and will not run without a named host review"
+fi
+
+if kvasir::is_dry_run; then
+  spire::preflight
+  exit 0
+fi
+
+spire::preflight
+spire::entry_create "$NAME" "$SELECTOR"
+if (( MINT_TOKEN == 1 )); then
+  spire::join_token_mint "$NAME"
+fi
+if (( INSTALL_AGENT == 1 )); then
+  kvasir::log warn "--install-agent is opt-in; install SPIRE agent on a named host separately"
+fi
