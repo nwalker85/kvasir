@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
 # kvasir enroll-user <username> <email> --first F --last L [--apply]
 #
-# Provisions a new identity in FreeIPA (LDAP source of truth) and Zitadel
-# (web SSO). Saves credentials in 1Password ("FreeIPA <username>" item).
-#
-# Does NOT bootstrap auth factors — run `kvasir add-ssh-key` after the new
-# user logs in once and changes the temporary password.
+# Sovereign user enrollment:
+# 1. Creates person in Kanidm (directory source of truth + POSIX account)
+# 2. Configures Keycloak credentials & federation (SSO / OIDC assertion)
+# 3. Saves credentials in 1Password ("Kanidm <username>" item)
 
 set -euo pipefail
 
 KVASIR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "${KVASIR_DIR}/lib/common.sh"
 source "${KVASIR_DIR}/lib/op.sh"
-source "${KVASIR_DIR}/lib/freeipa.sh"
-source "${KVASIR_DIR}/lib/zitadel.sh"
+source "${KVASIR_DIR}/lib/kanidm.sh"
+source "${KVASIR_DIR}/lib/keycloak.sh"
 
 kvasir::load_env
-kvasir::require_cmd ssh openssl op jq curl
+kvasir::require_cmd openssl jq
 
 USERNAME="" EMAIL="" FIRST="" LAST=""
 KVASIR_WANT_HELP=0
@@ -39,10 +38,10 @@ if (( KVASIR_WANT_HELP )) || [[ -z "$USERNAME" || -z "$EMAIL" ]]; then
   cat <<EOF
 Usage: kvasir enroll-user <username> <email> --first F --last L [--apply]
 
-Provisions a user in FreeIPA + Zitadel and stores creds in 1Password.
+Provisions a user in Kanidm + Keycloak and stores creds in 1Password.
 
   USERNAME   short login name (e.g. "jdoe")
-  EMAIL      contact + Zitadel login email
+  EMAIL      contact and login email
   --first    given name
   --last     family name
   --apply    actually mutate (default: dry-run)
@@ -53,32 +52,34 @@ fi
 [[ -z "$FIRST" ]] && kvasir::die "--first is required"
 [[ -z "$LAST"  ]] && kvasir::die "--last is required"
 
-kvasir::log info "user:  ${USERNAME}  (${FIRST} ${LAST})  email=${EMAIL}"
+kvasir::log info "user:    ${USERNAME} (${FIRST} ${LAST})  email=${EMAIL}"
+kvasir::log info "fabric:  Kanidm (directory) + Keycloak (SSO broker)"
 kvasir::is_dry_run && kvasir::log warn "DRY-RUN — pass --apply to mutate"
 
 # ---------- generate temp password ----------
 TEMP_PW="$(openssl rand -base64 24 | tr -d '=+/' | cut -c1-24)"
 
-# ---------- FreeIPA ----------
-kvasir::log info "[1/3] creating FreeIPA user..."
-ipa::admin_kinit_in_container
-ipa::user_add "$USERNAME" "$FIRST" "$LAST" "$EMAIL" "$TEMP_PW"
+# ---------- 1. Kanidm ----------
+kvasir::log info "[1/3] creating Kanidm person & POSIX account..."
+kanidm::user_create "$USERNAME" "$EMAIL" "$FIRST" "$LAST" "$TEMP_PW"
 
-# ---------- Zitadel ----------
-kvasir::log info "[2/3] creating Zitadel user..."
-ZID="$(zitadel::user_create "$USERNAME" "$EMAIL" "$FIRST" "$LAST")"
-kvasir::log info "  zitadel userId=${ZID}"
+# ---------- 2. Keycloak ----------
+kvasir::log info "[2/3] configuring Keycloak federation..."
+keycloak::user_setup "$USERNAME" "$EMAIL" "$FIRST" "$LAST"
 
-# ---------- 1Password ----------
-kvasir::log info "[3/3] writing creds to 1Password..."
-op::create_item "FreeIPA ${USERNAME}" "${KVASIR_OP_VAULT}" \
-  "username=${USERNAME}" \
-  "concealed:password=${TEMP_PW}" \
-  "url=https://${KVASIR_ZITADEL_HOST}" \
-  "email=${EMAIL}" \
-  "first-name=${FIRST}" \
-  "last-name=${LAST}" \
-  "zitadel-user-id=${ZID}" \
-  "notesPlain=Initial password — user must change at first login. After login, run 'kvasir add-ssh-key --fido2' to register a YubiKey."
+# ---------- 3. 1Password ----------
+kvasir::log info "[3/3] writing credentials to 1Password..."
+if kvasir::is_dry_run; then
+  kvasir::log info "DRY: op item create 'Kanidm ${USERNAME}' in vault ${KVASIR_OP_VAULT}"
+else
+  op::create_item "Kanidm ${USERNAME}" "${KVASIR_OP_VAULT}" \
+    "username=${USERNAME}" \
+    "concealed:password=${TEMP_PW}" \
+    "url=https://keycloak.ravenmask.net" \
+    "email=${EMAIL}" \
+    "first-name=${FIRST}" \
+    "last-name=${LAST}" \
+    "notesPlain=Initial sovereign identity credentials. Managed via Kanidm + Keycloak."
+fi
 
-kvasir::log info "DONE — ${USERNAME} provisioned. Temp password in 1P; share via secure channel."
+kvasir::log info "DONE — ${USERNAME} provisioned in sovereign fabric."
