@@ -9,10 +9,14 @@
 
 | Field | Value |
 |---|---|
-| Status | draft |
+| Status | **partially superseded** — see [postmortem](mac-enrollment-postmortem.md) |
 | Owner | Nate Walker |
 | Brainstormed | 2026-05-24 |
-| Tracking | (TBD — Linear issue link after plan is written) |
+| First execution | 2026-05-25 — odin + skoll attempted |
+| Outcome | Steps 1–6 (host record → CA cert) verified working end-to-end. Step 7 (LDAP bind) blocked by SIP + trust-store consent; needs redesign to a configuration profile (`.mobileconfig` via `profiles(1)`). See postmortem §"Approach D" sketch. |
+| Tracking | follow-up: redesign LDAP bind step + add `/etc/hosts` staging step |
+
+> **Note for readers:** sections below (especially Approaches Considered §A and §Architecture) reflect the original assumption that the LDAPv3 plist could be written directly under `/Library/Preferences/OpenDirectory/Configurations/LDAPv3/`. Modern macOS SIP blocks this. The postmortem documents the actual failure mode and a viable redesign. Read the postmortem first if you're picking up this work.
 
 ## Goal
 

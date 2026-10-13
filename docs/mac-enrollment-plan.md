@@ -1,5 +1,7 @@
 # macOS host enrollment — Implementation Plan
 
+> **Status (2026-05-26):** Tasks 1–18 of this plan were executed. Tasks 1–7 (renderers + state detection + probe) and Tasks 8–10 (krb5.conf, keytab install, CA cert) all work end-to-end on real macOS targets. Task 11 (`mac::bind_ldap` direct plist write) hit SIP and is **obsolete pending redesign** to a configuration profile (`.mobileconfig` via `profiles(1)`). Task 13 (write sudoers) and Task 14 (orchestrator) and downstream steps are correct in shape but never validate end-to-end until bind_ldap is fixed. See [`mac-enrollment-postmortem.md`](mac-enrollment-postmortem.md) for the full status and proposed redesign.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extend `kvasir enroll-host` so `kvasir enroll-host odin --apply` and `kvasir enroll-host skoll --apply` produce an Apple Silicon macOS host bound to FreeIPA — identity (`id nwalker` resolves), Kerberos SSO (host keytab installed, `kinit nwalker` works), and a kvasir-managed sudoers fragment granting nwalker passwordless root.
